@@ -8,13 +8,11 @@ import com.microsoft.azure.functions.HttpRequestMessage;
 import com.microsoft.azure.functions.HttpResponseMessage;
 import com.microsoft.azure.functions.HttpStatus;
 import com.microsoft.azure.functions.annotation.AuthorizationLevel;
-import com.microsoft.azure.functions.annotation.BindingName;
 import com.microsoft.azure.functions.annotation.FunctionName;
 import com.microsoft.azure.functions.annotation.HttpTrigger;
 import org.apache.commons.lang3.math.NumberUtils;
 
 import java.util.Map;
-import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -36,14 +34,14 @@ public class DiceRollFunction {
             final ExecutionContext context
     ) {
         // Parse URI Param
-        final Map<Dice, Integer> diceRollMap = transfromQueryParams(request.getQueryParameters());
+        final Map<Dice, Integer> diceRollMap = transformQueryParams(request.getQueryParameters());
 
         Roll dieRoll = Roll.toss(diceRollMap);
         
         return request.createResponseBuilder(HttpStatus.OK).body(dieRoll.outcome()).build();
     }
 
-    private Map<Dice, Integer> transfromQueryParams(Map<String, String> queryParameters) {
+    private Map<Dice, Integer> transformQueryParams(Map<String, String> queryParameters) {
         return queryParameters.entrySet().stream()
                 .filter(entry -> Dice.symbols().contains(entry.getKey())) // Must be supported Dice
                 .filter(entry -> NumberUtils.isParsable(entry.getValue())) // Must be valid Number of rolls

@@ -1,7 +1,6 @@
 package com.dmost.function;
 
 import com.dmost.HttpResponseMessageMock;
-import com.dmost.function.DiceRollFunction;
 import com.microsoft.azure.functions.*;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
