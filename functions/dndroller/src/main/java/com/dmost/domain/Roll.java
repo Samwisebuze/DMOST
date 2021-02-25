@@ -1,30 +1,44 @@
 package com.dmost.domain;
 
-
 import java.util.*;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 
 public class Roll {
     private Map<Dice, List<Integer>> results;
+    private RollStrategy rollStrategy;
+
+    private Roll(RollStrategy rollStrategy) {
+        this();
+        if (rollStrategy != null)
+            this.rollStrategy = rollStrategy;
+    }
+
+    private Roll() {
+        this.rollStrategy = new ThreadLocalRollStrategy();
+    }
 
     public static Roll toss(Map<Dice, Integer> dieToRollMap) {
         final Roll roll = new Roll();
-        roll.apply(dieToRollMap);
-        return roll;
+        return toss(roll, dieToRollMap);
     }
 
-    private static List<Integer> rollDice(Dice dice, Integer rolls) {
-        return ThreadLocalRandom.current()
-                .ints(rolls, Dice.MIN_FACE_VALUE, dice.getSides() + 1)
-                .boxed()
-                .collect(Collectors.toList());
+    public static Roll toss(Map<Dice, Integer> dieToRollMap, RollStrategy rollStrategy) {
+        final Roll roll = new Roll(rollStrategy);
+        return toss(roll, dieToRollMap);
+    }
+
+    private static Roll toss(Roll roll, Map<Dice, Integer> dieToRollMap) {
+        roll.apply(dieToRollMap);
+        return roll;
     }
 
     private void apply(Map<Dice, Integer> dieRolls) {
         results = dieRolls.entrySet()
                 .stream()
-                .collect(Collectors.toMap(Map.Entry::getKey, entry -> rollDice(entry.getKey(), entry.getValue())));
+                .collect(Collectors.toMap(
+                        Map.Entry::getKey,
+                        entry -> this.rollStrategy.apply(entry.getKey(), entry.getValue())
+                ));
     }
 
     public Map<Dice, List<Integer>> outcome() {

@@ -7,8 +7,11 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -29,6 +32,18 @@ class RollTest {
 
         assertTrue(roll.outcome().containsKey(expected_dice));
         assertEquals(expected_rolls, roll.outcome().get(expected_dice).size());
+    }
+
+    @Test
+    void toss_returns_dice_with_expected_rollList() {
+        final RollStrategy returnsOneRollStrategy = (dice, rolls) -> Collections.singletonList(1);
+
+        Map<Dice, Integer> inputMap = new HashMap<>();
+        inputMap.put(Dice.d20, 100);
+        final Roll roll = Roll.toss(inputMap, returnsOneRollStrategy);
+
+        assertEquals(1,  roll.outcome().get(Dice.d20).stream().reduce((Integer::sum)).get());
+        roll.outcome().get(Dice.d20);
     }
 
 

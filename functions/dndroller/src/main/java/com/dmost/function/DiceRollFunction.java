@@ -1,6 +1,7 @@
 package com.dmost.function;
 
 import com.dmost.domain.Dice;
+import com.dmost.domain.Roll;
 import com.microsoft.azure.functions.ExecutionContext;
 import com.microsoft.azure.functions.HttpMethod;
 import com.microsoft.azure.functions.HttpRequestMessage;
@@ -35,24 +36,17 @@ public class DiceRollFunction {
             final ExecutionContext context
     ) {
         // Parse URI Param
-        final Map<String, String> queryParameters = request.getQueryParameters();
-        final Map<Dice, Integer> diceRollMap = queryParameters.entrySet().stream()
-                .filter(entry -> !Dice.symbols().contains(entry.getKey())) // Must be supported Dice
-                .filter(entry -> NumberUtils.isParsable(entry.getValue())) // Must be valid Number of rolls
-                .collect(Collectors.toMap(entry -> Dice.valueOf(entry.getKey()), entry -> Integer.parseInt(entry.getValue())));
+        final Map<Dice, Integer> diceRollMap = transfromQueryParams(request.getQueryParameters());
 
-        return request.createResponseBuilder(HttpStatus.OK).body("Hello").build();
+        Roll dieRoll = Roll.toss(diceRollMap);
+        
+        return request.createResponseBuilder(HttpStatus.OK).body(dieRoll.outcome()).build();
     }
 
-    private static boolean isNumeric(String strNum) {
-        if (strNum == null) {
-            return false;
-        }
-        try {
-            double d = Double.parseDouble(strNum);
-        } catch (NumberFormatException nfe) {
-            return false;
-        }
-        return true;
+    private Map<Dice, Integer> transfromQueryParams(Map<String, String> queryParameters) {
+        return queryParameters.entrySet().stream()
+                .filter(entry -> Dice.symbols().contains(entry.getKey())) // Must be supported Dice
+                .filter(entry -> NumberUtils.isParsable(entry.getValue())) // Must be valid Number of rolls
+                .collect(Collectors.toMap(entry -> Dice.valueOf(entry.getKey()), entry -> Integer.parseInt(entry.getValue())));
     }
 }
