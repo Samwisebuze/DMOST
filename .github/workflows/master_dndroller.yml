@@ -4,9 +4,9 @@
 name: Build and deploy Java project to Azure Function App - dndroller
 
 on:
-  push:
-    branches:
-      - master
+  pull_request:
+    paths:
+      - functions/dndroller/**
   workflow_dispatch:
 
 env:
