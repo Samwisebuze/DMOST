@@ -42,4 +42,3 @@ jobs:
         publish-profile: ${{ secrets.AzureAppService_PublishProfile_53a91434c76b4456bb0f93e9cd93ccc8 }}
         package: '${{ env.PACKAGE_DIRECTORY }}'
         respect-pom-xml: true
-        working-directory: functions/dndroller
