@@ -25,13 +25,15 @@ jobs:
       uses: actions/setup-java@v1
       with:
         java-version: ${{ env.JAVA_VERSION }}
-
+        working-directory: functions/dndroller
+        
     - name: 'Restore Project Dependencies Using Mvn'
       shell: pwsh
       run: |
         pushd './${{ env.PACKAGE_DIRECTORY }}'
         mvn clean package
         popd
+    
     - name: 'Run Azure Functions Action'
       uses: Azure/functions-action@v1
       id: fa
@@ -41,3 +43,4 @@ jobs:
         publish-profile: ${{ secrets.AzureAppService_PublishProfile_53a91434c76b4456bb0f93e9cd93ccc8 }}
         package: '${{ env.PACKAGE_DIRECTORY }}'
         respect-pom-xml: true
+        working-directory: functions/dndroller
