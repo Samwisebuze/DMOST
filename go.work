@@ -1,0 +1,10 @@
+go 1.26.3
+
+use (
+	./cmd/dmostd
+	./pkg/app
+	./pkg/domain
+	./pkg/dto
+	./pkg/http
+	./pkg/inmem
+)
