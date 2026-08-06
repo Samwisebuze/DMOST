@@ -1,5 +1,6 @@
-# The Docker build context is the repository root, because this is a go.work
-# workspace with no root module — every module directory has to be present.
+# The Docker build context is the repository root, because that is where the root
+# module lives — the nested cmd/dmostd module resolves it through a relative
+# replace, so both have to be present.
 #
 # Do NOT exclude *_test.go: the `test` stage in docker/Dockerfile runs them.
 

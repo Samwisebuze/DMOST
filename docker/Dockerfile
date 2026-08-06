@@ -5,8 +5,9 @@
 #   base ──┬── test ──── builder ──── release  (scratch, binary only)
 #          └── debug-build ────────── debug    (alpine + delve on :2345)
 #
-# Build from the REPOSITORY ROOT — this is a go.work workspace with no root
-# module, so the context must contain go.work and all six module directories:
+# Build from the REPOSITORY ROOT — the root module holds pkg/..., and the nested
+# cmd/dmostd module reaches it through `replace ... => ../..`, so both must be
+# in the context:
 #
 #   docker build -f docker/Dockerfile -t dmostd:dev .
 #   docker build -f docker/Dockerfile --target debug -t dmostd:debug .
@@ -17,7 +18,7 @@
 # ---------------------------------------------------------------------------
 # base — toolchain + downloaded module dependencies, shared by every stage.
 # ---------------------------------------------------------------------------
-# Keep this tag in step with the `go` directive in go.work and the go.mod files.
+# Keep this tag in step with the `go` directive in both go.mod files.
 FROM golang:1.26.3-alpine AS base
 
 # CGO_ENABLED=0 is what makes the binary static enough for a scratch image;
@@ -31,17 +32,15 @@ WORKDIR /src
 
 # Copy only the module graph first so the (slow) dependency download stays
 # cached when application source changes.
-COPY go.work go.work.sum ./
+COPY go.mod go.sum ./
 COPY cmd/dmostd/go.mod cmd/dmostd/go.sum cmd/dmostd/
-COPY pkg/app/go.mod    pkg/app/go.sum    pkg/app/
-COPY pkg/domain/go.mod pkg/domain/go.sum pkg/domain/
-COPY pkg/dto/go.mod    pkg/dto/go.sum    pkg/dto/
-COPY pkg/http/go.mod   pkg/http/go.sum   pkg/http/
-COPY pkg/inmem/go.mod  pkg/inmem/go.sum  pkg/inmem/
 
-# Run at the workspace root, which resolves all six modules in one pass.
+# One download per module — there is no workspace to resolve both in one pass.
+# cmd/dmostd's `replace` points at /src, whose go.mod is already in place above,
+# so the root module resolves from disk rather than being fetched.
 RUN --mount=type=cache,target=/go/pkg/mod \
-    go mod download
+    go mod download \
+ && cd cmd/dmostd && go mod download
 
 COPY . .
 
@@ -52,15 +51,19 @@ COPY . .
 # ---------------------------------------------------------------------------
 FROM base AS test
 
-# Import-path patterns, not ./... — the latter fails at a go.work root with
-# "directory prefix . does not contain modules listed in go.work".
+# Once per module. cmd/dmostd is nested, so no pattern rooted at /src reaches it
+# — neither ./... nor github.com/samwisebuze/dmost/... — and a single invocation
+# would skip the e2e tests while still exiting 0.
 #
 # -count=1 disables Go's test result cache, which the GOCACHE mount would
 # otherwise carry across builds and turn into a no-op.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    go vet github.com/samwisebuze/dmost/... \
- && go test -count=1 github.com/samwisebuze/dmost/... \
+    go vet ./... \
+ && go test -count=1 ./... \
+ && cd cmd/dmostd \
+ && go vet ./... \
+ && go test -count=1 ./... \
  && touch /tests.ok
 
 
@@ -74,12 +77,15 @@ FROM base AS builder
 # build would never run the tests.
 COPY --from=test /tests.ok /tests.ok
 
+# Built from inside cmd/dmostd: it is its own module, so the package does not
+# resolve from /src.
+#
 # -trimpath removes absolute build paths; -s -w drops the symbol table and
 # DWARF, which is most of the binary's size.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    go build -trimpath -ldflags="-s -w" -o /out/dmostd \
-      github.com/samwisebuze/dmost/cmd/dmostd
+    cd cmd/dmostd \
+ && go build -trimpath -ldflags="-s -w" -o /out/dmostd .
 
 
 # ---------------------------------------------------------------------------
@@ -88,19 +94,17 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM base AS debug-build
 
 # Delve v1.27.1 supports Go 1.25-1.27, so it matches the 1.26.3 toolchain.
-# GOWORK=off keeps `go install pkg@version` from being evaluated against the
-# workspace in the current directory.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    GOWORK=off go install github.com/go-delve/delve/cmd/dlv@v1.27.1
+    go install github.com/go-delve/delve/cmd/dlv@v1.27.1
 
 # Deliberately NOT -trimpath and NOT -ldflags="-s -w": delve needs the DWARF
 # and the original source paths. -N disables optimization, -l disables inlining,
 # so stepping and variable inspection behave the way the source reads.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    go build -gcflags="all=-N -l" -o /out/dmostd \
-      github.com/samwisebuze/dmost/cmd/dmostd
+    cd cmd/dmostd \
+ && go build -gcflags="all=-N -l" -o /out/dmostd .
 
 
 # ---------------------------------------------------------------------------

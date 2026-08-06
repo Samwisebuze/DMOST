@@ -5,8 +5,8 @@
 #
 # Run it from anywhere — `context: ../..` is resolved relative to THIS file, not
 # to the working directory, so the build context is always the repository root.
-# That matters: this is a go.work workspace with no root module, and the build
-# needs go.work plus all six module directories present.
+# That matters: the build needs both the root module and the nested cmd/dmostd
+# module present.
 #
 # Requires Compose v2 (`docker compose`, not `docker-compose`). The Dockerfile
 # uses `RUN --mount=type=cache`, which only BuildKit can parse; v2 builds through

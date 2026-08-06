@@ -21,8 +21,9 @@ docker buildx version
 
 ## Build
 
-Always build **from the repository root**. This is a `go.work` workspace with no root
-module, so the context must include `go.work` and all six module directories.
+Always build **from the repository root**. The root module holds `pkg/...` and
+`cmd/dmostd` is a nested module resolving it through `replace ... => ../..`, so the
+context must include both the root `go.mod` and `cmd/dmostd/go.mod`.
 
 ```bash
 # Release image. Runs `go vet` + `go test` on the way through; a failure here
@@ -72,8 +73,8 @@ docker compose -f docker/compose/docker-compose.yml down
 
 `context: ../..` is resolved relative to the compose file rather than the working
 directory, so the command above works from anywhere and BuildKit still gets the
-repository root that the workspace build requires. `--build` runs the tests, for the
-same reason a plain `docker build` does.
+repository root that the build requires. `--build` runs the tests, for the same reason
+a plain `docker build` does.
 
 `DMOSTD_PORT` moves the published port; the container side stays `:8080`, which is
 hard-coded in `http.NewServer()`.
@@ -149,7 +150,7 @@ the returned closure instead:
 | Component | Pin | Notes |
 | --- | --- | --- |
 | Dockerfile frontend | `docker/dockerfile:1.26.0` | |
-| Build / test stages | `golang:1.26.3-alpine` | keep in step with the `go` directive in `go.work` |
+| Build / test stages | `golang:1.26.3-alpine` | keep in step with the `go` directive in both `go.mod` files |
 | Debug runtime | `alpine:3.22` | |
 | Delve | `v1.27.1` | supports Go 1.25–1.27 |
 | Release runtime | `scratch` | |
@@ -185,5 +186,8 @@ the returned closure instead:
 - **No runtime configuration.** The listen address is hard-coded to `:8080` in
   `http.NewServer()`, and `cmd/dmostd/main.go` still carries `//TODO: Load config from env`.
 - **`.dockerignore` must keep `*_test.go`** — the `test` stage runs them.
-- **`./...` does not work at the workspace root**, so the test and build stages use
-  `github.com/samwisebuze/dmost/...` import-path patterns instead.
+- **No single pattern covers both modules.** `cmd/dmostd` is nested, so from `/src`
+  neither `./...` nor `github.com/samwisebuze/dmost/...` reaches it — a lone invocation
+  would skip the e2e tests and still exit 0. The `test` stage therefore runs `go vet` and
+  `go test` once at the root and again inside `cmd/dmostd`, and the build stages `cd`
+  into `cmd/dmostd` before `go build .`.

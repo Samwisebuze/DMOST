@@ -1,1 +1,5 @@
 .vscode
+
+# Compiled binaries. `go build` inside a cmd/ module drops the executable next
+# to its source, named after the module directory.
+/cmd/dmostd/dmostd
