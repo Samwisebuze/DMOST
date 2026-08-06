@@ -54,10 +54,47 @@ would also drop `test` out of the default build's dependency graph, since the
 ```bash
 docker run --rm -p 8080:8080 dmostd:dev
 
+curl -s localhost:8080/healthz
 curl -s localhost:8080/users.json
 curl -s -X POST localhost:8080/users -H 'Content-Type: application/json' \
      -d '{"name":"Ada Lovelace","username":"ada","email":"ada@example.com"}'
 ```
+
+## Compose
+
+`compose/docker-compose.yml` wraps both images as services. Requires Compose v2
+(`docker compose`); v1's legacy builder cannot parse the Dockerfile's cache mounts.
+
+```bash
+docker compose -f docker/compose/docker-compose.yml up --build        # dmostd on :8080
+docker compose -f docker/compose/docker-compose.yml down
+```
+
+`context: ../..` is resolved relative to the compose file rather than the working
+directory, so the command above works from anywhere and BuildKit still gets the
+repository root that the workspace build requires. `--build` runs the tests, for the
+same reason a plain `docker build` does.
+
+`DMOSTD_PORT` moves the published port; the container side stays `:8080`, which is
+hard-coded in `http.NewServer()`.
+
+```bash
+DMOSTD_PORT=9090 docker compose -f docker/compose/docker-compose.yml up --build
+```
+
+The `debug` service sits behind a profile, so `up` does not start it and it never
+contends with `dmostd` for `:8080`. It carries the `SYS_PTRACE` and AppArmor settings
+described below, and publishes Delve on `DLV_PORT` (default `2345`):
+
+```bash
+docker compose -f docker/compose/docker-compose.yml --profile debug up --build debug
+```
+
+The release service runs `read_only` with `cap_drop: ALL` and `no-new-privileges` — the
+image is a single static binary running as UID 65532, so none of that costs it anything.
+Its `healthcheck` re-executes the binary as its own probe — see
+[Notes](#notes-and-limitations) — and adds `start_interval`, so a fresh container reports
+`healthy` in about a second rather than waiting out the 30s interval.
 
 ## Debug
 
@@ -130,8 +167,18 @@ the returned closure instead:
   Use this rather than `docker export`: exporting a *container* additionally shows
   `/dev`, `/etc/hosts`, `/proc` and friends, which the runtime injects and which are not
   part of the image.
-- **No `HEALTHCHECK`** on the release image; `scratch` has no shell or `curl` to run one.
-  Use an orchestrator-side TCP/HTTP probe against `:8080`.
+- **The `HEALTHCHECK` re-executes the binary.** Docker health checks run *inside* the
+  container, and `scratch` has no shell, `curl` or `wget` — so `dmostd` is its own
+  client: `/dmostd -healthcheck` `GET`s `/healthz` on `127.0.0.1:8080` and exits 0 or 1
+  (`cmd/dmostd/healthcheck.go`). It has to be declared in **exec** form,
+  `CMD ["/dmostd", "-healthcheck"]`; the shell form runs through a `/bin/sh` that is not
+  in the image.
+  ```bash
+  docker inspect --format '{{.State.Health.Status}}' <container>
+  ```
+  Note that `/healthz` is a liveness check only — it reports that the process can answer
+  requests, and inspects no services, so it will not go unhealthy over a sick dependency.
+  That is what makes it safe as a restart signal.
 - **No CA certificates.** Harmless today — `pkg/http/server.go` only reaches for
   `autocert` when `Server.Domain` is set, and nothing sets it. Enabling TLS would require
   adding `ca-certificates` and a writable autocert cache, which `scratch` cannot provide.

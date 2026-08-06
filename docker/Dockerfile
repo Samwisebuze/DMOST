@@ -152,4 +152,11 @@ COPY --from=builder /out/dmostd /dmostd
 USER 65532:65532
 EXPOSE 8080
 
+# The binary is its own health client — see runHealthcheck in cmd/dmostd. This
+# has to be the exec form: the shell form runs through /bin/sh, which does not
+# exist here. --start-period covers process startup, during which a failing
+# probe does not count against --retries.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD ["/dmostd", "-healthcheck"]
+
 ENTRYPOINT ["/dmostd"]
