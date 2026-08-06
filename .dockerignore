@@ -1,0 +1,22 @@
+# The Docker build context is the repository root, because this is a go.work
+# workspace with no root module — every module directory has to be present.
+#
+# Do NOT exclude *_test.go: the `test` stage in docker/Dockerfile runs them.
+
+# VCS. Excluding this also avoids the "detected dubious ownership" failure that
+# Go's VCS stamping hits inside containers (the build also passes -buildvcs=false).
+.git
+.gitignore
+
+# Editor / tooling state
+.vscode
+.claude
+
+# Docs and non-Go assets — none of it is compiled
+docs/
+public/
+*.md
+
+# The Dockerfile is supplied with -f and is uploaded outside the context, so
+# excluding it keeps the `COPY . .` layer cached across Dockerfile edits.
+docker/
