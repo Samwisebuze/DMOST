@@ -47,6 +47,7 @@ func NewServer() *Server {
 	// Setup error handling routes.
 	s.router.NotFoundHandler = http.HandlerFunc(s.handleNotFound)
 
+	s.registerHealthRoutes(s.router)
 	s.registerUserRoutes(s.router)
 
 	endpoints := collectLeafPaths(s.router)

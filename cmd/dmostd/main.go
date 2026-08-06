@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -15,6 +16,16 @@ import (
 )
 
 func main() {
+	// Probing mode: the container's HEALTHCHECK re-executes this binary to
+	// check on the daemon already running beside it. It never returns.
+	healthcheck := flag.Bool("healthcheck", false,
+		"probe a running daemon and exit 0 if healthy, 1 if not")
+	flag.Parse()
+
+	if *healthcheck {
+		runHealthcheck()
+	}
+
 	ctx := context.Background()
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
