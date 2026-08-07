@@ -1,0 +1,95 @@
+# Compose stack for cmd/dmostd.
+#
+#   docker compose -f docker/compose/docker-compose.yml up --build
+#   docker compose -f docker/compose/docker-compose.yml --profile debug up --build
+#
+# Run it from anywhere — `context: ../..` is resolved relative to THIS file, not
+# to the working directory, so the build context is always the repository root.
+# That matters: the build needs both the root module and the nested cmd/dmostd
+# module present.
+#
+# Requires Compose v2 (`docker compose`, not `docker-compose`). The Dockerfile
+# uses `RUN --mount=type=cache`, which only BuildKit can parse; v2 builds through
+# BuildKit by default, v1's legacy builder cannot.
+
+name: dmost
+
+services:
+  # -------------------------------------------------------------------------
+  # dmostd — the release image: a scratch container holding one static binary.
+  #
+  # `docker compose build` runs `go vet` and the full test suite on the way
+  # through, because the Dockerfile's builder stage COPYs from the test stage.
+  # A failing test fails the build and no image is produced.
+  # -------------------------------------------------------------------------
+  dmostd:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+      target: release
+    image: dmostd:dev
+    ports:
+      # The listen address is hard-coded to :8080 in http.NewServer(), so only
+      # the host side is configurable: DMOSTD_PORT=9090 docker compose up
+      - "${DMOSTD_PORT:-8080}:8080"
+    restart: unless-stopped
+
+    # The image is a single binary running as 65532:65532 with no filesystem to
+    # speak of; these just make that guarantee explicit to the runtime.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    # A health check runs its command *inside* the container, and scratch has no
+    # shell, curl or wget to run one with — so the daemon is its own client, and
+    # this re-executes the binary to probe GET /healthz. Exec form is required;
+    # the CMD-SHELL variant would need a /bin/sh that is not there.
+    #
+    # The image already carries the same HEALTHCHECK, so `docker run` is covered
+    # too. Restating it here keeps the timings visible, and adds start_interval,
+    # which polls every second during start_period so a fresh container reports
+    # healthy in about a second rather than up to thirty.
+    healthcheck:
+      test: ["CMD", "/dmostd", "-healthcheck"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+      start_interval: 1s
+
+  # -------------------------------------------------------------------------
+  # debug — the daemon under a headless Delve server on :2345.
+  #
+  # Profiled, so `docker compose up` does not start it and it never contends
+  # with dmostd for :8080. Start it on its own:
+  #
+  #   docker compose -f docker/compose/docker-compose.yml --profile debug up debug
+  #   dlv connect localhost:2345
+  # -------------------------------------------------------------------------
+  debug:
+    profiles: [debug]
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+      target: debug
+    image: dmostd:debug
+    ports:
+      - "${DMOSTD_PORT:-8080}:8080"
+      - "${DLV_PORT:-2345}:2345"
+
+    # Delve needs ptrace, which the default seccomp and AppArmor profiles block.
+    # Add `- seccomp:unconfined` below if it still cannot attach.
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - apparmor:unconfined
+
+    # Deliberately not `unless-stopped`: a debug session that dies should stay
+    # dead rather than restart out from under an attached client.
+    restart: "no"
+
+    # Keeps the container up if you ever swap the entrypoint for a shell.
+    stdin_open: true
+    tty: true
