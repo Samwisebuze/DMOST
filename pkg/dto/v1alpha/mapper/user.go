@@ -13,13 +13,7 @@ var userFactory domain.UserFactory
 
 // Inbound: JSON → Domain
 func UserFromCreateRequest(req dto.CreateUserRequest) (domain.User, error) {
-	// v1alpha sends "Name" as "First Last"; split it for the domain
-	parts := strings.SplitN(strings.TrimSpace(req.Name), " ", 2)
-	firstName := parts[0]
-	lastName := ""
-	if len(parts) > 1 {
-		lastName = parts[1]
-	}
+	firstName, lastName := splitName(req.Name)
 
 	email, err := domain.NewEmail(req.Email)
 	if err != nil {
@@ -31,10 +25,50 @@ func UserFromCreateRequest(req dto.CreateUserRequest) (domain.User, error) {
 }
 
 // Inbound: JSON → Domain
+//
+// ApplyUpdateRequest applies req's populated fields to u through the domain's
+// mutators, leaving omitted ones untouched. It takes an existing User rather
+// than building one so identity and CreatedAt ride along on the aggregate the
+// caller loaded, instead of coming from the request.
+func ApplyUpdateRequest(u *domain.User, req dto.UpdateUserRequest) error {
+	if req.Name != nil {
+		if err := u.Rename(splitName(*req.Name)); err != nil {
+			return err
+		}
+	}
+	if req.Email != nil {
+		email, err := domain.NewEmail(*req.Email)
+		if err != nil {
+			return fmt.Errorf("%w: %w", domain.ErrInvalid, err)
+		}
+		if err := u.ChangeEmail(email); err != nil {
+			return err
+		}
+	}
+	if req.Username != nil {
+		if err := u.SetHandle(*req.Username); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// splitName splits v1alpha's combined "First Last" into the domain's two
+// fields. A name with no space yields an empty last name, which the domain
+// rejects — the split does not decide validity.
+func splitName(name string) (first, last string) {
+	parts := strings.SplitN(strings.TrimSpace(name), " ", 2)
+	if len(parts) > 1 {
+		return parts[0], parts[1]
+	}
+	return parts[0], ""
+}
+
+// Inbound: JSON → Domain
 func UserResponseToUser(res dto.UserResponse) domain.User {
 	email, _ := domain.NewEmail(res.Email)
 	createdAt, _ := time.Parse(time.RFC3339, res.CreatedAt)
-	return userFactory.Rehydrate(domain.UserID(res.ID), res.FirstName, res.LastName, email, res.Username, createdAt)
+	return userFactory.Rehydrate(domain.UserID(res.ID), res.FirstName, res.LastName, email, res.Username, createdAt, res.Version)
 }
 
 // Outbound: Domain → JSON
@@ -46,6 +80,9 @@ func UserToResponse(u domain.User) dto.UserResponse {
 		Email:     u.Email().String(),
 		Username:  u.Handle(),
 		CreatedAt: u.CreatedAt().Format(time.RFC3339),
+		// Without this the client reads version 0 and can never make a
+		// conditional update stick.
+		Version: u.Version(),
 	}
 }
 

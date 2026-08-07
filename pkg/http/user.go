@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 
 	"github.com/gorilla/mux"
 	"github.com/samwisebuze/dmost/pkg/app"
@@ -21,6 +22,10 @@ func (s *Server) registerUserRoutes(router *mux.Router) {
 	r := router.PathPrefix("/users").Subrouter()
 	r.Handle("", CreateHandler(s.app)).Methods(http.MethodPost)
 	r.Handle("", ListHandler(s.app)).Methods(http.MethodGet)
+	// PATCH, not PUT: UpdateUserRequest leaves omitted fields alone rather than
+	// replacing the whole resource. It is also the method serveHTTP's "_method"
+	// form override accepts, so an HTML form can reach this route.
+	r.Handle("/{id}", UpdateHandler(s.app)).Methods(http.MethodPatch)
 }
 
 type Client struct {
@@ -64,6 +69,10 @@ func (u urlBuilder) ListAll() string {
 	return fmt.Sprintf("%s/users", u.Server)
 }
 
+func (u urlBuilder) Update(id domain.UserID) string {
+	return fmt.Sprintf("%s/users/%s", u.Server, url.PathEscape(id.String()))
+}
+
 func CreateHandler(app *app.App) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req v1alpha.CreateUserRequest
@@ -103,6 +112,9 @@ func CreateHandler(app *app.App) http.HandlerFunc {
 
 func (c *Client) Create(ctx context.Context, req v1alpha.CreateUserRequest) (domain.User, error) {
 	raw, err := json.Marshal(req)
+	if err != nil {
+		return domain.User{}, fmt.Errorf("POST %q: %w", c.urls.Create(), err)
+	}
 	resp, err := c.client.Post(c.urls.Create(), v1alpha.ContentTypeJSON, bytes.NewBuffer(raw))
 	if err != nil {
 		return domain.User{}, fmt.Errorf("POST %q failed: %w", c.urls.Create(), err)
@@ -120,6 +132,93 @@ func (c *Client) Create(ctx context.Context, req v1alpha.CreateUserRequest) (dom
 	data, err := decode[v1alpha.UserResponse](resp)
 	if err != nil {
 		return domain.User{}, fmt.Errorf("POST %q: %w", c.urls.Create(), err)
+	}
+
+	return mapper.UserResponseToUser(data), nil
+}
+
+func UpdateHandler(app *app.App) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := domain.UserID(mux.Vars(r)["id"])
+
+		var req v1alpha.UpdateUserRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			problem.New().
+				Detail(err.Error()).
+				Title("invalid_request").
+				Wrap(err).
+				Status(http.StatusBadRequest).
+				WriteTo(w)
+			return
+		}
+
+		usr, err := app.UserService.Update(r.Context(), id, req)
+		switch {
+		case errors.Is(err, domain.ErrNotFound):
+			problem.New().
+				Wrap(err).
+				Of(http.StatusNotFound).
+				WriteTo(w)
+			return
+		// Checked before ErrInvalid because a conflict is not a bad request:
+		// the edit was well formed, it just lost a race. Retrying it verbatim
+		// is wrong, so it must not look like a 422 the client can fix.
+		case errors.Is(err, domain.ErrConflict):
+			problem.New().
+				Wrap(err).
+				Of(http.StatusConflict).
+				WriteTo(w)
+			return
+		case errors.Is(err, domain.ErrInvalid):
+			problem.New().
+				Wrap(err).
+				Of(http.StatusUnprocessableEntity).
+				WriteTo(w)
+			return
+		case err != nil:
+			slog.Error(err.Error())
+			problem.New().
+				WrapSilent(err).
+				Of(http.StatusInternalServerError).
+				WriteTo(w)
+			return
+		}
+
+		data := mapper.UserToResponse(usr)
+		w.Header().Set("Content-Type", v1alpha.ContentTypeUserJSON)
+		json.NewEncoder(w).Encode(data)
+	}
+}
+
+func (c *Client) Update(ctx context.Context, id domain.UserID, req v1alpha.UpdateUserRequest) (domain.User, error) {
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return domain.User{}, fmt.Errorf("PATCH %q: %w", c.urls.Update(id), err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPatch, c.urls.Update(id), bytes.NewBuffer(raw))
+	if err != nil {
+		return domain.User{}, fmt.Errorf("PATCH %q: %w", c.urls.Update(id), err)
+	}
+	httpReq.Header.Set("Content-Type", v1alpha.ContentTypeJSON)
+
+	resp, err := c.client.Do(httpReq)
+	if err != nil {
+		return domain.User{}, fmt.Errorf("PATCH %q failed: %w", c.urls.Update(id), err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var prob problem.Problem
+		if err := json.NewDecoder(resp.Body).Decode(&prob); err != nil {
+			return domain.User{}, fmt.Errorf("PATCH %q: unprocessable response [code=%q]: %w", c.urls.Update(id), resp.Status, err)
+		}
+		return domain.User{}, fmt.Errorf("PATCH %q: %w", c.urls.Update(id), &prob)
+	}
+
+	data, err := decode[v1alpha.UserResponse](resp)
+	if err != nil {
+		return domain.User{}, fmt.Errorf("PATCH %q: %w", c.urls.Update(id), err)
 	}
 
 	return mapper.UserResponseToUser(data), nil

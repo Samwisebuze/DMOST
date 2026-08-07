@@ -2,14 +2,15 @@ package inmem
 
 import (
 	"context"
-	"errors"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/samwisebuze/dmost/pkg/domain"
 )
 
 type UserRepository struct {
+	mu   sync.RWMutex
 	data map[domain.UserID]*domain.User
 }
 
@@ -21,13 +22,32 @@ func NewUserRepository() *UserRepository {
 
 var _ domain.UserRepository = (*UserRepository)(nil)
 
+// userFactory is the domain's door for adapters: Save reaches through it to
+// advance an aggregate's version, which is not something callers may do.
+var userFactory domain.UserFactory
+
 // Save implements [domain.Repository].
 func (r *UserRepository) Save(ctx context.Context, u *domain.User) error {
-	if _, found := r.data[u.ID()]; found {
-		return errors.New("id collision")
+	// The lock spans the duplicate scan and the insert: splitting them would
+	// let two concurrent Saves both pass the uniqueness check.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// An existing ID is the update path, not a collision — but only if the
+	// caller loaded the revision still on record. Two callers that both read
+	// version N and write back would otherwise silently lose one edit; the
+	// second one's compare-and-set fails here instead.
+	cur, update := r.data[u.ID()]
+	if update && cur.Version() != u.Version() {
+		return domain.ErrConflict
 	}
 
 	for _, usr := range r.data {
+		// Skipping the record being written keeps a User from conflicting with
+		// its own email or handle.
+		if usr.ID().Equal(u.ID()) {
+			continue
+		}
 		if usr.Email().Equal(u.Email()) {
 			return domain.ErrExists
 		}
@@ -38,6 +58,13 @@ func (r *UserRepository) Save(ctx context.Context, u *domain.User) error {
 		}
 	}
 
+	// An insert stores the version the aggregate was constructed with; only a
+	// replacement advances it. Advancing u itself, not just the stored copy,
+	// lets the caller edit and save again without reloading.
+	if update {
+		userFactory.NextVersion(u)
+	}
+
 	cpy := *u
 	r.data[u.ID()] = &cpy
 	return nil
@@ -45,6 +72,8 @@ func (r *UserRepository) Save(ctx context.Context, u *domain.User) error {
 
 // Find implements [domain.Repository].
 func (r *UserRepository) Find(_ context.Context, id domain.UserID) (domain.User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	u, found := r.data[id]
 	if !found {
 		return domain.User{}, domain.ErrNotFound
@@ -54,6 +83,8 @@ func (r *UserRepository) Find(_ context.Context, id domain.UserID) (domain.User,
 
 // FindAll implements [domain.Repository].
 func (r *UserRepository) FindAll(_ context.Context, _ domain.UserFilter) ([]domain.User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	users := make([]domain.User, 0, len(r.data))
 	for _, u := range r.data {
 		users = append(users, *u)
@@ -65,10 +96,8 @@ func (r *UserRepository) FindAll(_ context.Context, _ domain.UserFilter) ([]doma
 
 // Delete implements [domain.Repository].
 func (r *UserRepository) Delete(ctx context.Context, id domain.UserID) error {
-	if _, found := r.data[id]; !found {
-		return nil
-	}
-
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	delete(r.data, id)
 	return nil
 }

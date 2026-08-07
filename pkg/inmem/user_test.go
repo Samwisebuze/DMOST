@@ -2,7 +2,9 @@ package inmem_test
 
 import (
 	"context"
+	"fmt"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/samwisebuze/dmost/internal/test"
@@ -33,13 +35,145 @@ func TestUserRepository_Save(t *testing.T) {
 		assert.Len(t, users, 2)
 	})
 
-	t.Run("rejects an id collision", func(t *testing.T) {
+	t.Run("replaces the user holding the same id", func(t *testing.T) {
+		// Save is an upsert keyed by UserID: a known ID is an update, not a
+		// collision.
 		sut := inmem.NewUserRepository()
 		id := domain.NewUserID()
 		require.NoError(t, sut.Save(context.Background(), test.MustRehydrateUser(t, id, 1)))
 
-		err := sut.Save(context.Background(), test.MustRehydrateUser(t, id, 2))
-		require.Error(t, err)
+		require.NoError(t, sut.Save(context.Background(), test.MustRehydrateUser(t, id, 2)))
+
+		users, err := sut.FindAll(context.Background(), domain.UserFilter{})
+		require.NoError(t, err)
+		require.Len(t, users, 1, "an update must not insert a second record")
+		assert.Equal(t, "user2@example.org", users[0].Email().String())
+	})
+
+	t.Run("re-saving a user unchanged succeeds", func(t *testing.T) {
+		// The uniqueness scan skips the record being written, so a user cannot
+		// collide with its own email or handle.
+		sut := inmem.NewUserRepository()
+		usr := test.MustUser(t, "a@example.org", "alice")
+		require.NoError(t, sut.Save(context.Background(), usr))
+
+		require.NoError(t, sut.Save(context.Background(), usr))
+	})
+
+	t.Run("rejects an edit taking another user's email", func(t *testing.T) {
+		sut := inmem.NewUserRepository()
+		require.NoError(t, sut.Save(context.Background(), test.MustUser(t, "taken@example.org", "alice")))
+		usr := test.MustUser(t, "b@example.org", "bob")
+		require.NoError(t, sut.Save(context.Background(), usr))
+
+		taken, err := domain.NewEmail("taken@example.org")
+		require.NoError(t, err)
+		require.NoError(t, usr.ChangeEmail(taken))
+
+		require.ErrorIs(t, sut.Save(context.Background(), usr), domain.ErrExists)
+
+		stored, err := sut.Find(context.Background(), usr.ID())
+		require.NoError(t, err)
+		assert.Equal(t, "b@example.org", stored.Email().String(), "a rejected update must not be applied")
+	})
+
+	t.Run("rejects an edit taking another user's handle", func(t *testing.T) {
+		sut := inmem.NewUserRepository()
+		require.NoError(t, sut.Save(context.Background(), test.MustUser(t, "a@example.org", "taken")))
+		usr := test.MustUser(t, "b@example.org", "bob")
+		require.NoError(t, sut.Save(context.Background(), usr))
+
+		require.NoError(t, usr.SetHandle("taken"))
+
+		require.ErrorIs(t, sut.Save(context.Background(), usr), domain.ErrExists)
+	})
+
+	t.Run("an insert keeps the constructed version", func(t *testing.T) {
+		sut := inmem.NewUserRepository()
+		usr := test.MustUser(t, "a@example.org", "alice")
+		require.NoError(t, sut.Save(context.Background(), usr))
+
+		got, err := sut.Find(context.Background(), usr.ID())
+		require.NoError(t, err)
+		assert.EqualValues(t, 1, got.Version(), "a first write is not a replacement")
+	})
+
+	t.Run("an update advances the version", func(t *testing.T) {
+		sut := inmem.NewUserRepository()
+		usr := test.MustUser(t, "a@example.org", "alice")
+		require.NoError(t, sut.Save(context.Background(), usr))
+
+		require.NoError(t, usr.Rename("Ada", "Lovelace"))
+		require.NoError(t, sut.Save(context.Background(), usr))
+
+		assert.EqualValues(t, 2, usr.Version(), "the caller's aggregate must track the stored revision")
+		got, err := sut.Find(context.Background(), usr.ID())
+		require.NoError(t, err)
+		assert.EqualValues(t, 2, got.Version())
+	})
+
+	t.Run("consecutive updates need no reload", func(t *testing.T) {
+		// Save advances the caller's aggregate, so the same variable stays
+		// savable.
+		sut := inmem.NewUserRepository()
+		usr := test.MustUser(t, "a@example.org", "alice")
+		require.NoError(t, sut.Save(context.Background(), usr))
+
+		for i := range 3 {
+			require.NoError(t, usr.SetHandle(fmt.Sprintf("alice%d", i)))
+			require.NoError(t, sut.Save(context.Background(), usr))
+		}
+		assert.EqualValues(t, 4, usr.Version())
+	})
+
+	t.Run("rejects a write from a stale version", func(t *testing.T) {
+		// Two callers load the same revision; the second to write loses.
+		sut := inmem.NewUserRepository()
+		usr := test.MustUser(t, "a@example.org", "alice")
+		require.NoError(t, sut.Save(context.Background(), usr))
+
+		first, err := sut.Find(context.Background(), usr.ID())
+		require.NoError(t, err)
+		second, err := sut.Find(context.Background(), usr.ID())
+		require.NoError(t, err)
+
+		require.NoError(t, first.Rename("Ada", "Lovelace"))
+		require.NoError(t, sut.Save(context.Background(), &first))
+
+		require.NoError(t, second.Rename("Grace", "Hopper"))
+		require.ErrorIs(t, sut.Save(context.Background(), &second), domain.ErrConflict)
+
+		got, err := sut.Find(context.Background(), usr.ID())
+		require.NoError(t, err)
+		assert.Equal(t, "Ada", got.FirstName(), "the losing write must not land")
+	})
+
+	t.Run("a rejected write leaves the version alone", func(t *testing.T) {
+		sut := inmem.NewUserRepository()
+		require.NoError(t, sut.Save(context.Background(), test.MustUser(t, "taken@example.org", "taken")))
+		usr := test.MustUser(t, "b@example.org", "bob")
+		require.NoError(t, sut.Save(context.Background(), usr))
+
+		require.NoError(t, usr.SetHandle("taken"))
+		require.ErrorIs(t, sut.Save(context.Background(), usr), domain.ErrExists)
+
+		assert.EqualValues(t, 1, usr.Version(), "nothing was persisted, so nothing was revised")
+	})
+
+	t.Run("an update preserves created_at", func(t *testing.T) {
+		sut := inmem.NewUserRepository()
+		usr := test.MustUser(t, "a@example.org", "alice")
+		require.NoError(t, sut.Save(context.Background(), usr))
+
+		loaded, err := sut.Find(context.Background(), usr.ID())
+		require.NoError(t, err)
+		require.NoError(t, loaded.Rename("Ada", "Lovelace"))
+		require.NoError(t, sut.Save(context.Background(), &loaded))
+
+		got, err := sut.Find(context.Background(), usr.ID())
+		require.NoError(t, err)
+		assert.Equal(t, usr.CreatedAt(), got.CreatedAt())
+		assert.Equal(t, "Ada", got.FirstName(), "the edit itself must land")
 	})
 
 	t.Run("rejects a duplicate email", func(t *testing.T) {
@@ -87,6 +221,118 @@ func TestUserRepository_Save(t *testing.T) {
 
 		_, err := sut.Find(context.Background(), rejected.ID())
 		require.ErrorIs(t, err, domain.ErrNotFound)
+	})
+}
+
+func TestUserRepository_ConcurrentAccess(t *testing.T) {
+	// Under pkg/http every request is its own goroutine, so the repository has
+	// to survive concurrent writers. Meaningful under -race.
+	const writers = 16
+
+	sut := inmem.NewUserRepository()
+	users := make([]*domain.User, writers)
+	for i := range users {
+		users[i] = test.MustUser(t, fmt.Sprintf("user%d@example.org", i), fmt.Sprintf("handle%d", i))
+	}
+
+	var start, done sync.WaitGroup
+	start.Add(1)
+	done.Add(2 * writers)
+	errs := make([]error, writers)
+	for i, usr := range users {
+		go func() {
+			defer done.Done()
+			start.Wait()
+			errs[i] = sut.Save(context.Background(), usr)
+		}()
+		go func() {
+			defer done.Done()
+			start.Wait()
+			_, _ = sut.FindAll(context.Background(), domain.UserFilter{})
+		}()
+	}
+	start.Done()
+	done.Wait()
+
+	for i, err := range errs {
+		require.NoError(t, err, "user %d", i)
+	}
+	got, err := sut.FindAll(context.Background(), domain.UserFilter{})
+	require.NoError(t, err)
+	assert.Len(t, got, writers)
+
+	t.Run("only one writer wins a contested handle", func(t *testing.T) {
+		sut := inmem.NewUserRepository()
+
+		var start, done sync.WaitGroup
+		start.Add(1)
+		done.Add(writers)
+		errs := make([]error, writers)
+		for i := range writers {
+			usr := test.MustUser(t, fmt.Sprintf("contested%d@example.org", i), "contested")
+			go func() {
+				defer done.Done()
+				start.Wait()
+				errs[i] = sut.Save(context.Background(), usr)
+			}()
+		}
+		start.Done()
+		done.Wait()
+
+		var saved int
+		for _, err := range errs {
+			if err == nil {
+				saved++
+				continue
+			}
+			require.ErrorIs(t, err, domain.ErrExists)
+		}
+		assert.Equal(t, 1, saved, "the uniqueness check must hold under contention")
+	})
+
+	t.Run("only one writer wins a contested update", func(t *testing.T) {
+		// Every writer loads the same revision and edits it. Without the
+		// compare-and-set they would all succeed and all but one edit would
+		// vanish; with it, exactly one write lands per revision.
+		sut := inmem.NewUserRepository()
+		usr := test.MustUser(t, "contested@example.org", "contested")
+		require.NoError(t, sut.Save(context.Background(), usr))
+
+		loaded := make([]domain.User, writers)
+		for i := range loaded {
+			got, err := sut.Find(context.Background(), usr.ID())
+			require.NoError(t, err)
+			require.NoError(t, got.Rename(fmt.Sprintf("writer%d", i), "last"))
+			loaded[i] = got
+		}
+
+		var start, done sync.WaitGroup
+		start.Add(1)
+		done.Add(writers)
+		errs := make([]error, writers)
+		for i := range loaded {
+			go func() {
+				defer done.Done()
+				start.Wait()
+				errs[i] = sut.Save(context.Background(), &loaded[i])
+			}()
+		}
+		start.Done()
+		done.Wait()
+
+		var saved int
+		for _, err := range errs {
+			if err == nil {
+				saved++
+				continue
+			}
+			require.ErrorIs(t, err, domain.ErrConflict)
+		}
+		assert.Equal(t, 1, saved, "a lost update must be reported, not silently accepted")
+
+		got, err := sut.Find(context.Background(), usr.ID())
+		require.NoError(t, err)
+		assert.EqualValues(t, 2, got.Version(), "exactly one revision was applied")
 	})
 }
 
