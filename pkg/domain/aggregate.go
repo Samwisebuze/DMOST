@@ -2,24 +2,21 @@ package domain
 
 import "time"
 
-// ID constrains the identity type of an [Aggregate]. The identity value objects
-// in vo.go — UserID and friends — satisfy it.
+// ID constrains the identity type of an [Aggregate].
+//
+// The identity value objects in vo.go satisfy it, see [UserID] for an example.
 type ID interface {
 	comparable
 	String() string
 }
 
-// Aggregate is the root type shared by every aggregate root in the domain. It
-// owns identity and creation time; entities compose it by embedding, which
-// promotes ID and CreatedAt with the embedder's concrete identity type.
-//
-// Its fields are unexported like the entities that embed it, and are set only
-// through newAggregate or, for adapters reconstructing persisted state,
-// rehydrateAggregate.
+// Aggregate is the root type shared by every aggregate root in the domain.
+// It owns identity, creation time, and version;
 type Aggregate[T ID] struct {
 	id        T
 	createdAt time.Time
-	version   uint64
+	// version is an optimistic-locking mechanism.
+	version uint64
 }
 
 // minVersion is the version a newly constructed aggregate carries — the one it

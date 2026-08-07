@@ -4,10 +4,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/samwisebuze/dmost/internal/dto/v1alpha"
 	"github.com/samwisebuze/dmost/internal/test"
 	"github.com/samwisebuze/dmost/pkg/app/services"
 	"github.com/samwisebuze/dmost/pkg/domain"
-	"github.com/samwisebuze/dmost/pkg/dto/v1alpha"
 	"github.com/samwisebuze/dmost/pkg/inmem"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

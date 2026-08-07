@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/samwisebuze/dmost/internal/dto/v1alpha"
+	"github.com/samwisebuze/dmost/internal/dto/v1alpha/mapper"
 	"github.com/samwisebuze/dmost/pkg/domain"
-	"github.com/samwisebuze/dmost/pkg/dto/v1alpha"
-	"github.com/samwisebuze/dmost/pkg/dto/v1alpha/mapper"
 )
 
 type UserService struct {

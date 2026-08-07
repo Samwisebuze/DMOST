@@ -1,3 +1,10 @@
+// Package mapper is the only bridge between the [v1alpha] wire types and the
+// domain. Every translation in either direction lives here, so that a change
+// to the v1alpha contract stops at this boundary instead of reaching the
+// domain — and so that no v1alpha type leaks past it.
+//
+// The DTO package is imported aliased as dto so that call sites read as a
+// direction (dto.CreateUserRequest to domain.User) rather than as a version.
 package mapper
 
 import (
@@ -6,8 +13,8 @@ import (
 	"strings"
 	"time"
 
+	dto "github.com/samwisebuze/dmost/internal/dto/v1alpha"
 	"github.com/samwisebuze/dmost/pkg/domain"
-	dto "github.com/samwisebuze/dmost/pkg/dto/v1alpha"
 )
 
 var userFactory domain.UserFactory

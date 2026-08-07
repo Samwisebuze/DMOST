@@ -11,10 +11,10 @@ import (
 	"net/url"
 
 	"github.com/gorilla/mux"
+	"github.com/samwisebuze/dmost/internal/dto/v1alpha"
+	"github.com/samwisebuze/dmost/internal/dto/v1alpha/mapper"
 	"github.com/samwisebuze/dmost/pkg/app"
 	"github.com/samwisebuze/dmost/pkg/domain"
-	"github.com/samwisebuze/dmost/pkg/dto/v1alpha"
-	"github.com/samwisebuze/dmost/pkg/dto/v1alpha/mapper"
 	"github.com/samwisebuze/dmost/pkg/http/problem"
 )
 

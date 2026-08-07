@@ -1,3 +1,9 @@
+// Package v1alpha is the first, unstable version of the wire contract. It is
+// frozen against edits once a client depends on it: see
+// [github.com/samwisebuze/dmost/internal/dto] for what belongs here and why a
+// change means a new sibling version rather than a change to this one.
+//
+// Translation to and from the domain lives in the mapper subpackage.
 package v1alpha
 
 const ContentTypeJSON string = "application/json"

@@ -49,19 +49,21 @@ type UserHandle struct {
 }
 
 func NewUserHandle(raw string) (UserHandle, error) {
-	norm, err := normalizeHandle(raw)
-	if err != nil {
-		return UserHandle{}, err
-	} else if norm == nil {
+	if raw == "" {
 		return UserHandle{}, nil
 	}
+	if strings.TrimSpace(raw) == "" {
+		return UserHandle{}, fmt.Errorf("%w: handle must not be blank", ErrInvalid)
+	}
+	norm := strings.ToLower(strings.TrimSpace(raw))
 
-	if utf8.RuneCountInString(*norm) > maxHandleChars {
-		return UserHandle{}, fmt.Errorf("%w: exceeds max length (%v)", err, maxHandleChars)
+	if utf8.RuneCountInString(norm) > maxHandleChars {
+		return UserHandle{}, fmt.Errorf("%w: exceeds max length (%v)", ErrInvalid, maxHandleChars)
 	}
 
-	return UserHandle{value: *norm}, nil
+	return UserHandle{value: norm}, nil
 }
+
 func (uh UserHandle) String() string { return uh.value }
 func (uh UserHandle) IsZero() bool   { return uh == UserHandle{} }
 func (uh UserHandle) Equal(o UserHandle) bool {
@@ -71,18 +73,4 @@ func (uh UserHandle) Equal(o UserHandle) bool {
 	}
 
 	return uh.value == o.value
-}
-
-// normalizeHandle turns the domain's "" for absent into the nilable handle the
-// aggregate stores. A handle that is only whitespace is a typo, not a name
-// anyone can be addressed by, so it is rejected rather than silently kept.
-func normalizeHandle(handle string) (*string, error) {
-	if handle == "" {
-		return nil, nil
-	}
-	if strings.TrimSpace(handle) == "" {
-		return nil, fmt.Errorf("%w: handle must not be blank", ErrInvalid)
-	}
-
-	return new(strings.ToLower(handle)), nil
 }
