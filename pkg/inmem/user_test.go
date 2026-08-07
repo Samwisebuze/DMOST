@@ -2,7 +2,9 @@ package inmem_test
 
 import (
 	"context"
+	"fmt"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/samwisebuze/dmost/internal/test"
@@ -87,6 +89,73 @@ func TestUserRepository_Save(t *testing.T) {
 
 		_, err := sut.Find(context.Background(), rejected.ID())
 		require.ErrorIs(t, err, domain.ErrNotFound)
+	})
+}
+
+func TestUserRepository_ConcurrentAccess(t *testing.T) {
+	// Under pkg/http every request is its own goroutine, so the repository has
+	// to survive concurrent writers. Meaningful under -race.
+	const writers = 16
+
+	sut := inmem.NewUserRepository()
+	users := make([]*domain.User, writers)
+	for i := range users {
+		users[i] = test.MustUser(t, fmt.Sprintf("user%d@example.org", i), fmt.Sprintf("handle%d", i))
+	}
+
+	var start, done sync.WaitGroup
+	start.Add(1)
+	done.Add(2 * writers)
+	errs := make([]error, writers)
+	for i, usr := range users {
+		go func() {
+			defer done.Done()
+			start.Wait()
+			errs[i] = sut.Save(context.Background(), usr)
+		}()
+		go func() {
+			defer done.Done()
+			start.Wait()
+			_, _ = sut.FindAll(context.Background(), domain.UserFilter{})
+		}()
+	}
+	start.Done()
+	done.Wait()
+
+	for i, err := range errs {
+		require.NoError(t, err, "user %d", i)
+	}
+	got, err := sut.FindAll(context.Background(), domain.UserFilter{})
+	require.NoError(t, err)
+	assert.Len(t, got, writers)
+
+	t.Run("only one writer wins a contested handle", func(t *testing.T) {
+		sut := inmem.NewUserRepository()
+
+		var start, done sync.WaitGroup
+		start.Add(1)
+		done.Add(writers)
+		errs := make([]error, writers)
+		for i := range writers {
+			usr := test.MustUser(t, fmt.Sprintf("contested%d@example.org", i), "contested")
+			go func() {
+				defer done.Done()
+				start.Wait()
+				errs[i] = sut.Save(context.Background(), usr)
+			}()
+		}
+		start.Done()
+		done.Wait()
+
+		var saved int
+		for _, err := range errs {
+			if err == nil {
+				saved++
+				continue
+			}
+			require.ErrorIs(t, err, domain.ErrExists)
+		}
+		assert.Equal(t, 1, saved, "the uniqueness check must hold under contention")
 	})
 }
 

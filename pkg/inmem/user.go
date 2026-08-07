@@ -5,11 +5,13 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/samwisebuze/dmost/pkg/domain"
 )
 
 type UserRepository struct {
+	mu   sync.RWMutex
 	data map[domain.UserID]*domain.User
 }
 
@@ -23,6 +25,11 @@ var _ domain.UserRepository = (*UserRepository)(nil)
 
 // Save implements [domain.Repository].
 func (r *UserRepository) Save(ctx context.Context, u *domain.User) error {
+	// The lock spans the duplicate scan and the insert: splitting them would
+	// let two concurrent Saves both pass the uniqueness check.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	if _, found := r.data[u.ID()]; found {
 		return errors.New("id collision")
 	}
@@ -45,6 +52,8 @@ func (r *UserRepository) Save(ctx context.Context, u *domain.User) error {
 
 // Find implements [domain.Repository].
 func (r *UserRepository) Find(_ context.Context, id domain.UserID) (domain.User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	u, found := r.data[id]
 	if !found {
 		return domain.User{}, domain.ErrNotFound
@@ -54,6 +63,8 @@ func (r *UserRepository) Find(_ context.Context, id domain.UserID) (domain.User,
 
 // FindAll implements [domain.Repository].
 func (r *UserRepository) FindAll(_ context.Context, _ domain.UserFilter) ([]domain.User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	users := make([]domain.User, 0, len(r.data))
 	for _, u := range r.data {
 		users = append(users, *u)
@@ -65,10 +76,8 @@ func (r *UserRepository) FindAll(_ context.Context, _ domain.UserFilter) ([]doma
 
 // Delete implements [domain.Repository].
 func (r *UserRepository) Delete(ctx context.Context, id domain.UserID) error {
-	if _, found := r.data[id]; !found {
-		return nil
-	}
-
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	delete(r.data, id)
 	return nil
 }
