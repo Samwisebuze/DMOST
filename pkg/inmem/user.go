@@ -3,7 +3,6 @@ package inmem
 import (
 	"context"
 	"slices"
-	"strings"
 	"sync"
 
 	"github.com/samwisebuze/dmost/pkg/domain"
@@ -51,9 +50,7 @@ func (r *UserRepository) Save(ctx context.Context, u *domain.User) error {
 		if usr.Email().Equal(u.Email()) {
 			return domain.ErrExists
 		}
-		// Handles are optional; compare the values, not the pointers, and let
-		// two users without a handle coexist.
-		if a, b := usr.Handle(), u.Handle(); a != nil && b != nil && *a == *b {
+		if u.Handle().Equal(usr.Handle()) {
 			return domain.ErrExists
 		}
 	}
@@ -90,7 +87,7 @@ func (r *UserRepository) FindAll(_ context.Context, _ domain.UserFilter) ([]doma
 		users = append(users, *u)
 	}
 
-	slices.SortStableFunc(users, func(a, b domain.User) int { return strings.Compare(a.ID().String(), b.ID().String()) })
+	slices.SortStableFunc(users, func(a, b domain.User) int { return a.ID().Compare(b.ID()) })
 	return users, nil
 }
 

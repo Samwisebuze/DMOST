@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/samwisebuze/dmost/internal/test"
 	"github.com/samwisebuze/dmost/pkg/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,17 +16,12 @@ func TestNewUser(t *testing.T) {
 		FirstName string
 		LastName  string
 		Email     domain.Email
-		Handle    string
 	}
 
 	validArgs := args{
 		FirstName: "first",
 		LastName:  "last",
-		Email: func() domain.Email {
-			v, _ := domain.NewEmail("valid@example.org")
-			return v
-		}(),
-		Handle: "username",
+		Email:     test.MustEmail(t, "valid@example.org"),
 	}
 
 	tests := map[string]struct {
@@ -42,11 +38,12 @@ func TestNewUser(t *testing.T) {
 
 				assert.Equal(tt, validArgs.FirstName, u.FirstName(), "first name mismatch, check golden values")
 				assert.Equal(tt, validArgs.LastName, u.LastName(), "last name mismatch, check golden values")
-				assert.EqualValues(tt, validArgs.Handle, *u.Handle(), "handle mismatch, check golden values")
 				assert.Equal(tt, validArgs.Email, u.Email(), "email mismatch, check golden values")
 				assert.NotZero(tt, u.CreatedAt(), "creation timestamp should be set")
 				assert.Equal(t, time.UTC, u.CreatedAt().Location())
 				assert.NotZero(tt, u.ID(), "id must be generated")
+				// Optional Fields
+				assert.Zero(tt, u.Handle())
 			},
 		},
 		"id is uuid v7": {
@@ -59,11 +56,6 @@ func TestNewUser(t *testing.T) {
 				assert.NoError(tt, err, "id is not a valid uuid")
 
 				assert.Equal(tt, uuid.Version(7), uid.Version())
-			},
-		},
-		"handle optional": {
-			argsMod: func(a *args) {
-				a.Handle = ""
 			},
 		},
 		"full name required": {
@@ -88,7 +80,7 @@ func TestNewUser(t *testing.T) {
 				tc.argsMod(&args)
 			}
 
-			got, err := domain.NewUser(args.FirstName, args.LastName, args.Email, args.Handle)
+			got, err := domain.NewUser(args.FirstName, args.LastName, args.Email)
 			if tc.wantErr {
 				require.Error(t, err)
 				require.ErrorIs(t, err, domain.ErrInvalid)
@@ -102,21 +94,9 @@ func TestNewUser(t *testing.T) {
 		})
 	}
 }
-
-// mustUser is the domain package's own fixture; internal/test imports domain,
-// so this file cannot use it without an import cycle.
-func mustUser(t *testing.T) domain.User {
-	t.Helper()
-	email, err := domain.NewEmail("valid@example.org")
-	require.NoError(t, err)
-	usr, err := domain.NewUser("first", "last", email, "handle")
-	require.NoError(t, err)
-	return usr
-}
-
 func TestUser_ChangeEmail(t *testing.T) {
 	t.Run("replaces the address", func(t *testing.T) {
-		usr := mustUser(t)
+		usr := test.MustUser(t, "e@example.org", "changeEmail")
 		next, err := domain.NewEmail("next@example.org")
 		require.NoError(t, err)
 
@@ -125,7 +105,7 @@ func TestUser_ChangeEmail(t *testing.T) {
 	})
 
 	t.Run("rejects the zero email", func(t *testing.T) {
-		usr := mustUser(t)
+		usr := test.MustUser(t, "e@example.org", "zeroEmail")
 		before := usr.Email()
 
 		require.ErrorIs(t, usr.ChangeEmail(domain.Email{}), domain.ErrInvalid)
@@ -135,7 +115,7 @@ func TestUser_ChangeEmail(t *testing.T) {
 
 func TestUser_Rename(t *testing.T) {
 	t.Run("replaces both name parts", func(t *testing.T) {
-		usr := mustUser(t)
+		usr := test.MustUser(t, "e@example.org", "rename")
 
 		require.NoError(t, usr.Rename("Ada", "Lovelace"))
 		assert.Equal(t, "Ada", usr.FirstName())
@@ -149,8 +129,7 @@ func TestUser_Rename(t *testing.T) {
 			"neither":  {"", ""},
 		} {
 			t.Run(name, func(t *testing.T) {
-				usr := mustUser(t)
-
+				usr := test.MustUser(t, "e@example.org", "renameMissingPart")
 				require.ErrorIs(t, usr.Rename(args[0], args[1]), domain.ErrInvalid)
 				assert.Equal(t, "first", usr.FirstName(), "a rejected rename must not mutate the user")
 				assert.Equal(t, "last", usr.LastName())
@@ -161,33 +140,34 @@ func TestUser_Rename(t *testing.T) {
 
 func TestUser_SetHandle(t *testing.T) {
 	t.Run("replaces the handle", func(t *testing.T) {
-		usr := mustUser(t)
+		usr := test.MustUser(t, "e@example.org", "setHandle")
 
 		require.NoError(t, usr.SetHandle("next"))
 		require.NotNil(t, usr.Handle())
-		assert.Equal(t, "next", *usr.Handle())
+		assert.Equal(t, test.MustUserHandle(t, "next"), usr.Handle())
 	})
 
 	t.Run("an empty handle clears it", func(t *testing.T) {
-		usr := mustUser(t)
+		usr := test.MustUser(t, "e@example.org", "setHandleEmpty")
 
 		require.NoError(t, usr.SetHandle(""))
-		assert.Nil(t, usr.Handle(), "handles are nilable so a user can have none")
+		assert.Zero(t, usr.Handle(), "handles are explicit zero so a user can have none")
 	})
 
 	t.Run("rejects a blank handle", func(t *testing.T) {
-		usr := mustUser(t)
+		usr := test.MustUser(t, "e@example.org", "setHandleBlank")
 
 		require.ErrorIs(t, usr.SetHandle("   "), domain.ErrInvalid)
 		require.NotNil(t, usr.Handle(), "a rejected change must not mutate the user")
-		assert.Equal(t, "handle", *usr.Handle())
+		assert.Equal(t, test.MustUserHandle(t, "setHandleBlank"), usr.Handle())
 	})
 }
 
 func TestUser_MutatorsPreserveIdentity(t *testing.T) {
 	// The load-modify-save cycle relies on this: nothing a caller can edit
 	// touches the ID or CreatedAt stamped at construction.
-	usr := mustUser(t)
+	usr := test.MustUser(t, "e@example.org", "setHandle")
+
 	id, createdAt := usr.ID(), usr.CreatedAt()
 
 	next, err := domain.NewEmail("next@example.org")

@@ -2,7 +2,9 @@ package domain
 
 import (
 	"errors"
+	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -11,9 +13,8 @@ type UserID string
 
 func NewUserID() UserID { return UserID(uuid.Must(uuid.NewV7()).String()) }
 
-func (uid UserID) String() string {
-	return string(uid)
-}
+func (uid UserID) String() string       { return string(uid) }
+func (uid UserID) Compare(o UserID) int { return strings.Compare(string(uid), string(o)) }
 
 // Equal reports whether two IDs identify the same user. Callers should prefer
 // it over ==, so the comparison stays correct if the representation changes.
@@ -41,4 +42,47 @@ func (e Email) String() string { return e.value }
 // are already lowercased, so this is a plain comparison of canonical forms.
 func (e Email) Equal(other Email) bool {
 	return e == other
+}
+
+type UserHandle struct {
+	value string
+}
+
+func NewUserHandle(raw string) (UserHandle, error) {
+	norm, err := normalizeHandle(raw)
+	if err != nil {
+		return UserHandle{}, err
+	} else if norm == nil {
+		return UserHandle{}, nil
+	}
+
+	if utf8.RuneCountInString(*norm) > maxHandleChars {
+		return UserHandle{}, fmt.Errorf("%w: exceeds max length (%v)", err, maxHandleChars)
+	}
+
+	return UserHandle{value: *norm}, nil
+}
+func (uh UserHandle) String() string { return uh.value }
+func (uh UserHandle) IsZero() bool   { return uh == UserHandle{} }
+func (uh UserHandle) Equal(o UserHandle) bool {
+	// zero represents an unset handle, they can coexist
+	if uh.IsZero() || o.IsZero() {
+		return false
+	}
+
+	return uh.value == o.value
+}
+
+// normalizeHandle turns the domain's "" for absent into the nilable handle the
+// aggregate stores. A handle that is only whitespace is a typo, not a name
+// anyone can be addressed by, so it is rejected rather than silently kept.
+func normalizeHandle(handle string) (*string, error) {
+	if handle == "" {
+		return nil, nil
+	}
+	if strings.TrimSpace(handle) == "" {
+		return nil, fmt.Errorf("%w: handle must not be blank", ErrInvalid)
+	}
+
+	return new(strings.ToLower(handle)), nil
 }

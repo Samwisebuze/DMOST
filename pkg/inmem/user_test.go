@@ -349,7 +349,7 @@ func TestUserRepository_Find(t *testing.T) {
 	assert.Equal(t, usr.FirstName(), got.FirstName())
 	assert.Equal(t, usr.LastName(), got.LastName())
 	require.NotNil(t, got.Handle())
-	assert.Equal(t, *usr.Handle(), *got.Handle())
+	assert.Equal(t, usr.Handle(), got.Handle())
 
 	_, err = sut.Find(context.Background(), domain.NewUserID())
 	require.ErrorIs(t, err, domain.ErrNotFound)

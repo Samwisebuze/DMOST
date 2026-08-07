@@ -3,8 +3,11 @@ package domain
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
+)
+
+const (
+	maxHandleChars = 64
 )
 
 type UserFilter struct{}
@@ -40,32 +43,28 @@ type User struct {
 	firstName string
 	lastName  string
 	email     Email
-	handle    *string // v1alpha calls this "username"
+	handle    UserHandle // v1alpha calls this "username"
 }
 
-func NewUser(firstName, lastName string, email Email, handle string) (User, error) {
+func NewUser(firstName, lastName string, email Email) (User, error) {
 	if err := validateName(firstName, lastName); err != nil {
 		return User{}, err
 	}
 	if email.IsZero() {
 		return User{}, fmt.Errorf("%w: email required", ErrInvalid)
 	}
-	username, err := normalizeHandle(handle)
-	if err != nil {
-		return User{}, err
-	}
+
 	return User{
 		Aggregate: newAggregate(NewUserID()),
 		firstName: firstName,
 		lastName:  lastName,
 		email:     email,
-		handle:    username,
 	}, nil
 }
 
 // RehydrateUser skips validation. Only repositories should call this.
 // It lives in the domain package so it can access unexported fields.
-func rehydrateUser(id UserID, firstName, lastName string, email Email, handle *string, createdAt time.Time, version uint64) User {
+func rehydrateUser(id UserID, firstName, lastName string, email Email, handle UserHandle, createdAt time.Time, version uint64) User {
 	return User{
 		Aggregate: rehydrateAggregate(id, createdAt, version),
 		firstName: firstName, lastName: lastName,
@@ -75,10 +74,10 @@ func rehydrateUser(id UserID, firstName, lastName string, email Email, handle *s
 
 // Getters — domain exposes read-only access.
 // ID and CreatedAt are promoted from the embedded [Aggregate].
-func (u User) FirstName() string { return u.firstName }
-func (u User) LastName() string  { return u.lastName }
-func (u User) Email() Email      { return u.email }
-func (u User) Handle() *string   { return u.handle }
+func (u User) FirstName() string  { return u.firstName }
+func (u User) LastName() string   { return u.lastName }
+func (u User) Email() Email       { return u.email }
+func (u User) Handle() UserHandle { return u.handle }
 
 // Mutators — the only way to edit a User outside the domain. They take pointer
 // receivers (the getters stay value receivers) and run the same rules as
@@ -116,10 +115,11 @@ func (u *User) Rename(first, last string) error {
 //
 // Returns an error wrapping [ErrInvalid] if handle is non-empty but blank.
 func (u *User) SetHandle(handle string) error {
-	h, err := normalizeHandle(handle)
+	h, err := NewUserHandle(handle)
 	if err != nil {
 		return err
 	}
+
 	u.handle = h
 	return nil
 }
@@ -129,17 +129,4 @@ func validateName(first, last string) error {
 		return fmt.Errorf("%w: first and last name required", ErrInvalid)
 	}
 	return nil
-}
-
-// normalizeHandle turns the domain's "" for absent into the nilable handle the
-// aggregate stores. A handle that is only whitespace is a typo, not a name
-// anyone can be addressed by, so it is rejected rather than silently kept.
-func normalizeHandle(handle string) (*string, error) {
-	if handle == "" {
-		return nil, nil
-	}
-	if strings.TrimSpace(handle) == "" {
-		return nil, fmt.Errorf("%w: handle must not be blank", ErrInvalid)
-	}
-	return &handle, nil
 }

@@ -44,7 +44,7 @@ func TestUsersAPI_Create(t *testing.T) {
 	assert.Equal(t, req.Email, res.Email().String())
 	assert.Contains(t, req.Name, res.FirstName())
 	assert.Contains(t, req.Name, res.LastName())
-	assert.Equal(t, req.Username, *res.Handle())
+	assert.Equal(t, req.Username, res.Handle().String())
 }
 
 func TestUsersAPI_Update(t *testing.T) {

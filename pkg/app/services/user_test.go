@@ -37,9 +37,9 @@ func TestUserService_Update(t *testing.T) {
 
 		assert.Equal(t, "Ada", got.FirstName())
 		assert.Equal(t, "Lovelace", got.LastName())
-		assert.Equal(t, "ada@example.org", got.Email().String())
-		require.NotNil(t, got.Handle())
-		assert.Equal(t, "ada", *got.Handle())
+		assert.Equal(t, test.MustEmail(t, "ada@example.org"), got.Email())
+		require.NotZero(t, got.Handle())
+		assert.Equal(t, test.MustUserHandle(t, "ada"), got.Handle())
 	})
 
 	t.Run("leaves omitted fields unchanged", func(t *testing.T) {
@@ -50,14 +50,13 @@ func TestUserService_Update(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		assert.Equal(t, "moved@example.org", got.Email().String())
+		assert.Equal(t, test.MustEmail(t, "moved@example.org"), got.Email())
 		assert.Equal(t, usr.FirstName(), got.FirstName())
-		require.NotNil(t, got.Handle())
-		assert.Equal(t, "alice", *got.Handle())
+		assert.Equal(t, test.MustUserHandle(t, "alice"), got.Handle())
 	})
 
 	t.Run("an empty username clears the handle", func(t *testing.T) {
-		// Omitted and empty are distinct in UpdateUserRequest: the first means
+		// Omitted an empty are distinct in UpdateUserRequest: the first means
 		// "unchanged", the second means "remove it".
 		sut, usr := seed(t, "a@example.org", "alice")
 
@@ -65,7 +64,7 @@ func TestUserService_Update(t *testing.T) {
 			Username: ptr(""),
 		})
 		require.NoError(t, err)
-		assert.Nil(t, got.Handle())
+		assert.Zero(t, got.Handle())
 	})
 
 	t.Run("preserves created_at across the round trip", func(t *testing.T) {

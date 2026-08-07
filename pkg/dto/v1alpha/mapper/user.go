@@ -1,6 +1,7 @@
 package mapper
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -13,15 +14,26 @@ var userFactory domain.UserFactory
 
 // Inbound: JSON → Domain
 func UserFromCreateRequest(req dto.CreateUserRequest) (domain.User, error) {
+	var errs []error
 	firstName, lastName := splitName(req.Name)
 
 	email, err := domain.NewEmail(req.Email)
 	if err != nil {
-		return domain.User{}, fmt.Errorf("%w: %w", domain.ErrInvalid, err)
+		errs = append(errs, err)
 	}
 
+	usr, err := domain.NewUser(firstName, lastName, email)
+	if err != nil {
+		errs = append(errs, err)
+	}
 	// "Username" in v1alpha maps to "Handle" in domain
-	return domain.NewUser(firstName, lastName, email, req.Username)
+	errs = append(errs, usr.SetHandle(req.Username))
+
+	if err := errors.Join(errs...); err != nil {
+		return domain.User{}, err
+	}
+
+	return usr, nil
 }
 
 // Inbound: JSON → Domain
@@ -67,18 +79,23 @@ func splitName(name string) (first, last string) {
 // Inbound: JSON → Domain
 func UserResponseToUser(res dto.UserResponse) domain.User {
 	email, _ := domain.NewEmail(res.Email)
+	username, _ := domain.NewUserHandle(*res.Username)
 	createdAt, _ := time.Parse(time.RFC3339, res.CreatedAt)
-	return userFactory.Rehydrate(domain.UserID(res.ID), res.FirstName, res.LastName, email, res.Username, createdAt, res.Version)
+	return userFactory.Rehydrate(domain.UserID(res.ID), res.FirstName, res.LastName, email, username, createdAt, res.Version)
 }
 
 // Outbound: Domain → JSON
 func UserToResponse(u domain.User) dto.UserResponse {
+	var handle *string
+	if !u.Handle().IsZero() {
+		handle = new(u.Handle().String())
+	}
 	return dto.UserResponse{
 		ID:        u.ID().String(),
 		FirstName: u.FirstName(),
 		LastName:  u.LastName(),
 		Email:     u.Email().String(),
-		Username:  u.Handle(),
+		Username:  handle,
 		CreatedAt: u.CreatedAt().Format(time.RFC3339),
 		// Without this the client reads version 0 and can never make a
 		// conditional update stick.
