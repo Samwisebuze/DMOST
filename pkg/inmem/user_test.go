@@ -2,54 +2,20 @@ package inmem_test
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"testing"
-	"time"
 
-	"github.com/google/uuid"
+	"github.com/samwisebuze/dmost/internal/test"
 	"github.com/samwisebuze/dmost/pkg/domain"
 	"github.com/samwisebuze/dmost/pkg/inmem"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func MustNewUser(t testing.TB) *domain.User {
-	t.Helper()
-	email, err := domain.NewEmail("valid@example.org")
-	require.NoError(t, err)
-	usr, err := domain.NewUser("fist", "last", email, uuid.Must(uuid.NewUUID()).String())
-	require.NoError(t, err)
-	return &usr
-}
-
-// MustUser builds a valid user with a caller-chosen email and handle so
-// uniqueness assertions can vary one field at a time. An empty handle leaves
-// the user's handle nil.
-func MustUser(t testing.TB, email, handle string) *domain.User {
-	t.Helper()
-	addr, err := domain.NewEmail(email)
-	require.NoError(t, err)
-	usr, err := domain.NewUser("first", "last", addr, handle)
-	require.NoError(t, err)
-	return &usr
-}
-
-// MustRehydrateUser builds a user with a caller-chosen ID so ordering
-// assertions do not depend on generation order.
-func MustRehydrateUser(t testing.TB, id domain.UserID, n int) *domain.User {
-	t.Helper()
-	email, err := domain.NewEmail(fmt.Sprintf("user%d@example.org", n))
-	require.NoError(t, err)
-	handle := fmt.Sprintf("handle%d", n)
-	usr := domain.UserFactory{}.Rehydrate(id, "first", "last", email, &handle, time.Now())
-	return &usr
-}
-
 func TestUserRepository_Save(t *testing.T) {
 	t.Run("stores a new user", func(t *testing.T) {
 		sut := inmem.NewUserRepository()
-		usr := MustNewUser(t)
+		usr := test.MustNewUser(t)
 		require.NoError(t, sut.Save(context.Background(), usr))
 
 		got, err := sut.Find(context.Background(), usr.ID())
@@ -59,8 +25,8 @@ func TestUserRepository_Save(t *testing.T) {
 
 	t.Run("stores distinct users", func(t *testing.T) {
 		sut := inmem.NewUserRepository()
-		require.NoError(t, sut.Save(context.Background(), MustUser(t, "a@example.org", "alice")))
-		require.NoError(t, sut.Save(context.Background(), MustUser(t, "b@example.org", "bob")))
+		require.NoError(t, sut.Save(context.Background(), test.MustUser(t, "a@example.org", "alice")))
+		require.NoError(t, sut.Save(context.Background(), test.MustUser(t, "b@example.org", "bob")))
 
 		users, err := sut.FindAll(context.Background(), domain.UserFilter{})
 		require.NoError(t, err)
@@ -70,42 +36,42 @@ func TestUserRepository_Save(t *testing.T) {
 	t.Run("rejects an id collision", func(t *testing.T) {
 		sut := inmem.NewUserRepository()
 		id := domain.NewUserID()
-		require.NoError(t, sut.Save(context.Background(), MustRehydrateUser(t, id, 1)))
+		require.NoError(t, sut.Save(context.Background(), test.MustRehydrateUser(t, id, 1)))
 
-		err := sut.Save(context.Background(), MustRehydrateUser(t, id, 2))
+		err := sut.Save(context.Background(), test.MustRehydrateUser(t, id, 2))
 		require.Error(t, err)
 	})
 
 	t.Run("rejects a duplicate email", func(t *testing.T) {
 		sut := inmem.NewUserRepository()
-		require.NoError(t, sut.Save(context.Background(), MustUser(t, "dupe@example.org", "alice")))
+		require.NoError(t, sut.Save(context.Background(), test.MustUser(t, "dupe@example.org", "alice")))
 
-		err := sut.Save(context.Background(), MustUser(t, "dupe@example.org", "bob"))
+		err := sut.Save(context.Background(), test.MustUser(t, "dupe@example.org", "bob"))
 		require.ErrorIs(t, err, domain.ErrExists)
 	})
 
 	t.Run("rejects a duplicate email differing only by case", func(t *testing.T) {
-		// NewEmail canonicalises to lower case, so these are the same address.
+		// NewEmail canonicalizes to lower case, so these are the same address.
 		sut := inmem.NewUserRepository()
-		require.NoError(t, sut.Save(context.Background(), MustUser(t, "dupe@example.org", "alice")))
+		require.NoError(t, sut.Save(context.Background(), test.MustUser(t, "dupe@example.org", "alice")))
 
-		err := sut.Save(context.Background(), MustUser(t, "DUPE@Example.ORG", "bob"))
+		err := sut.Save(context.Background(), test.MustUser(t, "DUPE@Example.ORG", "bob"))
 		require.ErrorIs(t, err, domain.ErrExists)
 	})
 
 	t.Run("rejects a duplicate handle", func(t *testing.T) {
 		sut := inmem.NewUserRepository()
-		require.NoError(t, sut.Save(context.Background(), MustUser(t, "a@example.org", "shared")))
+		require.NoError(t, sut.Save(context.Background(), test.MustUser(t, "a@example.org", "shared")))
 
-		err := sut.Save(context.Background(), MustUser(t, "b@example.org", "shared"))
+		err := sut.Save(context.Background(), test.MustUser(t, "b@example.org", "shared"))
 		require.ErrorIs(t, err, domain.ErrExists)
 	})
 
 	t.Run("allows several users without a handle", func(t *testing.T) {
 		// An empty handle is absent, not a value, so it cannot collide.
 		sut := inmem.NewUserRepository()
-		require.NoError(t, sut.Save(context.Background(), MustUser(t, "a@example.org", "")))
-		require.NoError(t, sut.Save(context.Background(), MustUser(t, "b@example.org", "")))
+		require.NoError(t, sut.Save(context.Background(), test.MustUser(t, "a@example.org", "")))
+		require.NoError(t, sut.Save(context.Background(), test.MustUser(t, "b@example.org", "")))
 
 		users, err := sut.FindAll(context.Background(), domain.UserFilter{})
 		require.NoError(t, err)
@@ -114,9 +80,9 @@ func TestUserRepository_Save(t *testing.T) {
 
 	t.Run("leaves the repository unchanged on rejection", func(t *testing.T) {
 		sut := inmem.NewUserRepository()
-		require.NoError(t, sut.Save(context.Background(), MustUser(t, "a@example.org", "alice")))
+		require.NoError(t, sut.Save(context.Background(), test.MustUser(t, "a@example.org", "alice")))
 
-		rejected := MustUser(t, "a@example.org", "bob")
+		rejected := test.MustUser(t, "a@example.org", "bob")
 		require.ErrorIs(t, sut.Save(context.Background(), rejected), domain.ErrExists)
 
 		_, err := sut.Find(context.Background(), rejected.ID())
@@ -126,7 +92,7 @@ func TestUserRepository_Save(t *testing.T) {
 
 func TestUserRepository_Find(t *testing.T) {
 	sut := inmem.NewUserRepository()
-	usr := MustNewUser(t)
+	usr := test.MustNewUser(t)
 	require.NoError(t, sut.Save(context.Background(), usr))
 
 	got, err := sut.Find(context.Background(), usr.ID())
@@ -168,7 +134,7 @@ func TestUserRepository_FindAll(t *testing.T) {
 		// Insert in reverse so the ordering comes from FindAll, not from Save.
 		sut := inmem.NewUserRepository()
 		for i := len(want) - 1; i >= 0; i-- {
-			require.NoError(t, sut.Save(context.Background(), MustRehydrateUser(t, want[i], i)))
+			require.NoError(t, sut.Save(context.Background(), test.MustRehydrateUser(t, want[i], i)))
 		}
 
 		users, err := sut.FindAll(context.Background(), domain.UserFilter{})
@@ -183,10 +149,10 @@ func TestUserRepository_FindAll(t *testing.T) {
 	})
 
 	t.Run("ordering is stable across calls", func(t *testing.T) {
-		// Map iteration is randomised, so repeated calls must still agree.
+		// Map iteration is randomized, so repeated calls must still agree.
 		sut := inmem.NewUserRepository()
 		for i := range 8 {
-			require.NoError(t, sut.Save(context.Background(), MustRehydrateUser(t, domain.NewUserID(), i)))
+			require.NoError(t, sut.Save(context.Background(), test.MustRehydrateUser(t, domain.NewUserID(), i)))
 		}
 
 		first, err := sut.FindAll(context.Background(), domain.UserFilter{})
@@ -200,7 +166,7 @@ func TestUserRepository_FindAll(t *testing.T) {
 
 	t.Run("carries whole users, not just ids", func(t *testing.T) {
 		sut := inmem.NewUserRepository()
-		usr := MustNewUser(t)
+		usr := test.MustNewUser(t)
 		require.NoError(t, sut.Save(context.Background(), usr))
 
 		users, err := sut.FindAll(context.Background(), domain.UserFilter{})
@@ -215,7 +181,7 @@ func TestUserRepository_FindAll(t *testing.T) {
 func TestUserRepository_Delete(t *testing.T) {
 	t.Run("removes an existing user", func(t *testing.T) {
 		sut := inmem.NewUserRepository()
-		usr := MustNewUser(t)
+		usr := test.MustNewUser(t)
 		require.NoError(t, sut.Save(context.Background(), usr))
 
 		require.NoError(t, sut.Delete(context.Background(), usr.ID()))
@@ -226,7 +192,7 @@ func TestUserRepository_Delete(t *testing.T) {
 
 	t.Run("is a no-op for an unknown id", func(t *testing.T) {
 		sut := inmem.NewUserRepository()
-		usr := MustNewUser(t)
+		usr := test.MustNewUser(t)
 		require.NoError(t, sut.Save(context.Background(), usr))
 
 		require.NoError(t, sut.Delete(context.Background(), domain.NewUserID()))
@@ -238,7 +204,7 @@ func TestUserRepository_Delete(t *testing.T) {
 
 	t.Run("is idempotent", func(t *testing.T) {
 		sut := inmem.NewUserRepository()
-		usr := MustNewUser(t)
+		usr := test.MustNewUser(t)
 		require.NoError(t, sut.Save(context.Background(), usr))
 
 		require.NoError(t, sut.Delete(context.Background(), usr.ID()))
@@ -247,8 +213,8 @@ func TestUserRepository_Delete(t *testing.T) {
 
 	t.Run("leaves other users in place", func(t *testing.T) {
 		sut := inmem.NewUserRepository()
-		keep := MustUser(t, "keep@example.org", "keep")
-		drop := MustUser(t, "drop@example.org", "drop")
+		keep := test.MustUser(t, "keep@example.org", "keep")
+		drop := test.MustUser(t, "drop@example.org", "drop")
 		require.NoError(t, sut.Save(context.Background(), keep))
 		require.NoError(t, sut.Save(context.Background(), drop))
 
@@ -262,10 +228,10 @@ func TestUserRepository_Delete(t *testing.T) {
 
 	t.Run("frees the email and handle for reuse", func(t *testing.T) {
 		sut := inmem.NewUserRepository()
-		usr := MustUser(t, "reuse@example.org", "reuse")
+		usr := test.MustUser(t, "reuse@example.org", "reuse")
 		require.NoError(t, sut.Save(context.Background(), usr))
 		require.NoError(t, sut.Delete(context.Background(), usr.ID()))
 
-		require.NoError(t, sut.Save(context.Background(), MustUser(t, "reuse@example.org", "reuse")))
+		require.NoError(t, sut.Save(context.Background(), test.MustUser(t, "reuse@example.org", "reuse")))
 	})
 }
