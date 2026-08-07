@@ -6,6 +6,7 @@ import (
 )
 
 var (
-	ErrInvalid = errors.New("invalid")
-	ErrExists  = fmt.Errorf("%w: resource exists", ErrInvalid)
+	ErrInvalid  = errors.New("invalid")
+	ErrExists   = fmt.Errorf("%w: resource exists", ErrInvalid)
+	ErrNotFound = fmt.Errorf("resource not found")
 )

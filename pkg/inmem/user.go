@@ -10,12 +10,12 @@ import (
 )
 
 type UserRepository struct {
-	data map[string]*domain.User
+	data map[domain.UserID]*domain.User
 }
 
 func NewUserRepository() *UserRepository {
 	return &UserRepository{
-		data: map[string]*domain.User{},
+		data: map[domain.UserID]*domain.User{},
 	}
 }
 
@@ -23,7 +23,7 @@ var _ domain.UserRepository = (*UserRepository)(nil)
 
 // Save implements [domain.Repository].
 func (r *UserRepository) Save(ctx context.Context, u *domain.User) error {
-	if _, found := r.data[u.ID().String()]; found {
+	if _, found := r.data[u.ID()]; found {
 		return errors.New("id collision")
 	}
 
@@ -34,8 +34,17 @@ func (r *UserRepository) Save(ctx context.Context, u *domain.User) error {
 	}
 
 	cpy := *u
-	r.data[u.ID().String()] = &cpy
+	r.data[u.ID()] = &cpy
 	return nil
+}
+
+// Find implements [domain.Repository].
+func (r *UserRepository) Find(_ context.Context, id domain.UserID) (domain.User, error) {
+	u, found := r.data[id]
+	if !found {
+		return domain.User{}, domain.ErrNotFound
+	}
+	return *u, nil
 }
 
 // FindAll implements [domain.Repository].
