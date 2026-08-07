@@ -28,7 +28,12 @@ func (r *UserRepository) Save(ctx context.Context, u *domain.User) error {
 	}
 
 	for _, usr := range r.data {
-		if usr.Email() == u.Email() || usr.Handle() == u.Handle() {
+		if usr.Email().Equal(u.Email()) {
+			return domain.ErrExists
+		}
+		// Handles are optional; compare the values, not the pointers, and let
+		// two users without a handle coexist.
+		if a, b := usr.Handle(), u.Handle(); a != nil && b != nil && *a == *b {
 			return domain.ErrExists
 		}
 	}
@@ -56,4 +61,14 @@ func (r *UserRepository) FindAll(_ context.Context, _ domain.UserFilter) ([]doma
 
 	slices.SortStableFunc(users, func(a, b domain.User) int { return strings.Compare(a.ID().String(), b.ID().String()) })
 	return users, nil
+}
+
+// Delete implements [domain.Repository].
+func (r *UserRepository) Delete(ctx context.Context, id domain.UserID) error {
+	if _, found := r.data[id]; !found {
+		return nil
+	}
+
+	delete(r.data, id)
+	return nil
 }

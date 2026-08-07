@@ -21,6 +21,9 @@ type UserRepository interface {
 	//
 	// Returns [ErrNotFound] if no such entity exists.
 	Find(context.Context, UserID) (User, error)
+
+	// Delete removes a user from the collection.
+	Delete(context.Context, UserID) error
 }
 
 type User struct {
