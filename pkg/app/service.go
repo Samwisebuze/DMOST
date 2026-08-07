@@ -18,5 +18,15 @@ type UserService interface {
 	// version lands, the fix is a version-neutral command struct per use case,
 	// with each dto version mapping into it — not a second Create method.
 	Create(context.Context, v1alpha.CreateUserRequest) (domain.User, error)
+
+	// Update loads the User, applies the request's populated fields, and saves
+	// it back. Attributes the request omits — including CreatedAt, which no
+	// request can carry — survive on the loaded aggregate.
+	//
+	// Returns [domain.ErrNotFound] if no such User exists, [domain.ErrExists]
+	// if the edit collides with another User, and [domain.ErrConflict] if the
+	// request carries a Version the stored User has moved past.
+	Update(context.Context, domain.UserID, v1alpha.UpdateUserRequest) (domain.User, error)
+
 	FindAll(context.Context) ([]domain.User, error)
 }

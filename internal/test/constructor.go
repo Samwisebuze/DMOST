@@ -38,6 +38,6 @@ func MustRehydrateUser(t testing.TB, id domain.UserID, n int) *domain.User {
 	email, err := domain.NewEmail(fmt.Sprintf("user%d@example.org", n))
 	require.NoError(t, err)
 	handle := fmt.Sprintf("handle%d", n)
-	usr := domain.UserFactory{}.Rehydrate(id, "first", "last", email, &handle, time.Now())
+	usr := domain.UserFactory{}.Rehydrate(id, "first", "last", email, &handle, time.Now(), 1)
 	return &usr
 }
