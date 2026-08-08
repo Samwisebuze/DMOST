@@ -24,6 +24,21 @@ func NewUserService(users domain.UserRepository) *UserService {
 
 }
 
+// Find implements [app.UserService].
+func (u *UserService) Find(ctx context.Context, raw string) (domain.User, error) {
+	id, err := domain.ParseUserID(raw)
+	if err != nil {
+		return domain.User{}, err
+	}
+
+	user, err := u.Users.Find(ctx, id)
+	if err != nil {
+		return domain.User{}, err
+	}
+
+	return user, nil
+}
+
 // FindAll implements [app.UserService].
 func (u *UserService) FindAll(ctx context.Context) ([]domain.User, error) {
 	users, err := u.Users.FindAll(ctx, domain.UserFilter{})

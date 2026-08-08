@@ -20,9 +20,17 @@ import (
 )
 
 type FakeUserService struct {
+	FindFn    func(context.Context, string) (domain.User, error)
 	FindAllFn func(context.Context) ([]domain.User, error)
 	CreateFn  func(context.Context, v1alpha.CreateUserRequest) (domain.User, error)
 	UpdateFn  func(context.Context, domain.UserID, v1alpha.UpdateUserRequest) (domain.User, error)
+}
+
+var _ app.UserService = FakeUserService{}
+
+// Find implements [app.UserService].
+func (f FakeUserService) Find(ctx context.Context, id string) (domain.User, error) {
+	return f.FindFn(ctx, id)
 }
 
 // FindAll implements [domain.Repository].
@@ -49,7 +57,7 @@ func TestCreateHandler_ReturnsSuccess(t *testing.T) {
 			return domain.User{}, nil
 		},
 	}
-	handler := http.CreateHandler(app)
+	handler := http.CreateUserHandler(app)
 	bodyBytes, err := json.Marshal(v1alpha.CreateUserRequest{
 		Name:     "first last",
 		Email:    "valid@example.org",
@@ -72,7 +80,7 @@ func TestCreateHandler_Returns500OnError(t *testing.T) {
 		},
 	}
 
-	handler := http.CreateHandler(app)
+	handler := http.CreateUserHandler(app)
 	bodyBytes, err := json.Marshal(v1alpha.CreateUserRequest{
 		Name:     "first last",
 		Email:    "valid@example.org",
@@ -95,7 +103,7 @@ func TestCreateHandler_Returns422OnErrInvalid(t *testing.T) {
 		},
 	}
 
-	handler := http.CreateHandler(&app)
+	handler := http.CreateUserHandler(&app)
 	bodyBytes, err := json.Marshal(v1alpha.CreateUserRequest{
 		Name:     "first last",
 		Email:    "valid@example.org",
@@ -144,7 +152,7 @@ func TestUpdateHandler_MapsErrorsToStatus(t *testing.T) {
 			}
 
 			w := httptest.NewRecorder()
-			http.UpdateHandler(&a)(w, updateRequest(t, domain.NewUserID(), body))
+			http.UpdateUserHandler(&a)(w, updateRequest(t, domain.NewUserID(), body))
 
 			resp := w.Result()
 			assert.Equal(t, tc.wantStatus, resp.StatusCode)
@@ -173,7 +181,7 @@ func TestUpdateHandler_PassesTheIDAndRequestThrough(t *testing.T) {
 		},
 	}
 
-	http.UpdateHandler(&a)(httptest.NewRecorder(), updateRequest(t, id, body))
+	http.UpdateUserHandler(&a)(httptest.NewRecorder(), updateRequest(t, id, body))
 
 	assert.Equal(t, id, gotID)
 	require.NotNil(t, gotReq.Version, "the expected version must survive decoding, or every update is unconditional")
@@ -185,7 +193,7 @@ func TestUpdateHandler_Returns400OnInvalidRequest(t *testing.T) {
 	var a app.App
 
 	w := httptest.NewRecorder()
-	http.UpdateHandler(&a)(w, updateRequest(t, domain.NewUserID(), nil))
+	http.UpdateUserHandler(&a)(w, updateRequest(t, domain.NewUserID(), nil))
 
 	resp := w.Result()
 	assert.Equal(t, nethttp.StatusBadRequest, resp.StatusCode)
@@ -195,7 +203,7 @@ func TestUpdateHandler_Returns400OnInvalidRequest(t *testing.T) {
 func TestCreateHandler_Returns400OnInvalidRequest(t *testing.T) {
 	var app app.App
 
-	handler := http.CreateHandler(&app)
+	handler := http.CreateUserHandler(&app)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/", strings.NewReader(""))
 	handler(w, r)

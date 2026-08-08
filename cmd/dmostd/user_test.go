@@ -57,7 +57,7 @@ func TestUsersAPI_Update(t *testing.T) {
 	usr := MustCreateUser(t, cli)
 
 	name := "Ada Lovelace"
-	got, err := cli.Update(context.Background(), usr.ID(), v1alpha.UpdateUserRequest{
+	got, err := cli.UpdateUser(context.Background(), usr.ID(), v1alpha.UpdateUserRequest{
 		Name:    &name,
 		Version: ptr(usr.Version()),
 	})
@@ -82,16 +82,16 @@ func TestUsersAPI_UpdateRejectsAStaleVersion(t *testing.T) {
 	stale := usr.Version()
 
 	first := "Ada Lovelace"
-	_, err := cli.Update(context.Background(), usr.ID(), v1alpha.UpdateUserRequest{Name: &first, Version: ptr(stale)})
+	_, err := cli.UpdateUser(context.Background(), usr.ID(), v1alpha.UpdateUserRequest{Name: &first, Version: ptr(stale)})
 	require.NoError(t, err)
 
 	// A second client still holding the pre-update representation.
 	second := "Grace Hopper"
-	_, err = cli.Update(context.Background(), usr.ID(), v1alpha.UpdateUserRequest{Name: &second, Version: ptr(stale)})
+	_, err = cli.UpdateUser(context.Background(), usr.ID(), v1alpha.UpdateUserRequest{Name: &second, Version: ptr(stale)})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Conflict", "a lost update must surface as 409, not a silent overwrite")
 
-	got, err := cli.ListAll(context.Background())
+	got, err := cli.Users(context.Background())
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "Ada", got[0].FirstName(), "the losing write must not land")
@@ -106,7 +106,7 @@ func TestUsersAPI_UpdateUnknownUser(t *testing.T) {
 	cli := MustClient(t, m.HTTPServer.URL())
 
 	name := "Ada Lovelace"
-	_, err := cli.Update(context.Background(), domain.NewUserID(), v1alpha.UpdateUserRequest{Name: &name})
+	_, err := cli.UpdateUser(context.Background(), domain.NewUserID(), v1alpha.UpdateUserRequest{Name: &name})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Not Found")
 }
@@ -125,7 +125,7 @@ func TestUsersAPI_List(t *testing.T) {
 		MustCreateUser(t, cli),
 	}
 
-	got, err := cli.ListAll(context.Background())
+	got, err := cli.Users(context.Background())
 	require.NoError(t, err)
 
 	require.Len(t, got, 2)

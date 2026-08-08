@@ -29,4 +29,5 @@ type UserService interface {
 	Update(context.Context, domain.UserID, v1alpha.UpdateUserRequest) (domain.User, error)
 
 	FindAll(context.Context) ([]domain.User, error)
+	Find(context.Context, string) (domain.User, error)
 }

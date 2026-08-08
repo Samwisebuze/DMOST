@@ -12,6 +12,13 @@ import (
 type UserID string
 
 func NewUserID() UserID { return UserID(uuid.Must(uuid.NewV7()).String()) }
+func ParseUserID(raw string) (UserID, error) {
+	if err := uuid.Validate(raw); err != nil {
+		return "", fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+
+	return UserID(uuid.MustParse(raw).String()), nil
+}
 
 func (uid UserID) String() string       { return string(uid) }
 func (uid UserID) Compare(o UserID) int { return strings.Compare(string(uid), string(o)) }

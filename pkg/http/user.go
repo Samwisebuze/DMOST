@@ -20,12 +20,13 @@ import (
 
 func (s *Server) registerUserRoutes(router *mux.Router) {
 	r := router.PathPrefix("/users").Subrouter()
-	r.Handle("", CreateHandler(s.app)).Methods(http.MethodPost)
-	r.Handle("", ListHandler(s.app)).Methods(http.MethodGet)
+	r.Handle("", CreateUserHandler(s.app)).Methods(http.MethodPost)
+	r.Handle("", ListUsersHandler(s.app)).Methods(http.MethodGet)
 	// PATCH, not PUT: UpdateUserRequest leaves omitted fields alone rather than
 	// replacing the whole resource. It is also the method serveHTTP's "_method"
 	// form override accepts, so an HTML form can reach this route.
-	r.Handle("/{id}", UpdateHandler(s.app)).Methods(http.MethodPatch)
+	r.Handle("/{id}", UpdateUserHandler(s.app)).Methods(http.MethodPatch)
+	r.Handle("/{id}", FindUserHandler(s.app)).Methods(http.MethodGet)
 }
 
 type Client struct {
@@ -73,7 +74,7 @@ func (u urlBuilder) Update(id domain.UserID) string {
 	return fmt.Sprintf("%s/users/%s", u.Server, url.PathEscape(id.String()))
 }
 
-func CreateHandler(app *app.App) http.HandlerFunc {
+func CreateUserHandler(app *app.App) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req v1alpha.CreateUserRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -103,10 +104,11 @@ func CreateHandler(app *app.App) http.HandlerFunc {
 			return
 		}
 
-		data := mapper.UserToResponse(usr)
-		w.Header().Set("Content-Type", v1alpha.ContentTypeUserJSON)
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(data)
+		json.NewEncoder(NewWriter(w).
+			ContentType(v1alpha.ContentTypeUserJSON).
+			Status(http.StatusCreated),
+		).Encode(mapper.UserToResponse(usr))
 	}
 }
 
@@ -137,7 +139,7 @@ func (c *Client) Create(ctx context.Context, req v1alpha.CreateUserRequest) (dom
 	return mapper.UserResponseToUser(data), nil
 }
 
-func UpdateHandler(app *app.App) http.HandlerFunc {
+func UpdateUserHandler(app *app.App) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := domain.UserID(mux.Vars(r)["id"])
 
@@ -190,7 +192,7 @@ func UpdateHandler(app *app.App) http.HandlerFunc {
 	}
 }
 
-func (c *Client) Update(ctx context.Context, id domain.UserID, req v1alpha.UpdateUserRequest) (domain.User, error) {
+func (c *Client) UpdateUser(ctx context.Context, id domain.UserID, req v1alpha.UpdateUserRequest) (domain.User, error) {
 	raw, err := json.Marshal(req)
 	if err != nil {
 		return domain.User{}, fmt.Errorf("PATCH %q: %w", c.urls.Update(id), err)
@@ -224,7 +226,7 @@ func (c *Client) Update(ctx context.Context, id domain.UserID, req v1alpha.Updat
 	return mapper.UserResponseToUser(data), nil
 }
 
-func ListHandler(app *app.App) http.HandlerFunc {
+func ListUsersHandler(app *app.App) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		users, err := app.UserService.FindAll(r.Context())
 		if err != nil {
@@ -241,7 +243,7 @@ func ListHandler(app *app.App) http.HandlerFunc {
 	}
 }
 
-func (c *Client) ListAll(ctx context.Context) ([]domain.User, error) {
+func (c *Client) Users(ctx context.Context) ([]domain.User, error) {
 	resp, err := c.client.Get(c.urls.ListAll())
 	if err != nil {
 		return nil, fmt.Errorf("client error: %w", err)
@@ -263,6 +265,39 @@ func (c *Client) ListAll(ctx context.Context) ([]domain.User, error) {
 	}
 
 	return mapper.UserListResponseToUsers(data), nil
+}
+
+func FindUserHandler(app *app.App) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+		id, ok := vars["id"]
+		if !ok || id == "" {
+			problem.New().
+				Title("invalid router").
+				Of(http.StatusInternalServerError).
+				WriteTo(w)
+			return
+		}
+		user, err := app.UserService.Find(r.Context(), id)
+		if errors.Is(err, domain.ErrNotFound) {
+			problem.New().
+				Title("not found").
+				Wrap(err).
+				Of(http.StatusNotFound).
+				WriteTo(w)
+		}
+		if err != nil {
+			problem.New().
+				WrapSilent(err).
+				Of(http.StatusInternalServerError).
+				WriteTo(w)
+			return
+		}
+
+		res := mapper.UserToResponse(user)
+		w.Header().Set("Content-Type", v1alpha.ContentTypeUserJSON)
+		json.NewEncoder(w).Encode(res)
+	}
 }
 
 func decode[T any](r *http.Response) (T, error) {
