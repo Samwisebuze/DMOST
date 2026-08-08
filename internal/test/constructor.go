@@ -33,9 +33,9 @@ func MustNewUser(t testing.TB) *domain.User {
 // MustUser builds a valid user with a caller-chosen email and handle so
 // uniqueness assertions can vary one field at a time. An empty handle leaves
 // the user's handle nil.
-func MustUser(t testing.TB, email, handle string) *domain.User {
+func MustUser(t testing.TB, email, handle string, opts ...domain.UserOption) *domain.User {
 	t.Helper()
-	usr, err := domain.NewUser("first", "last", MustEmail(t, email))
+	usr, err := domain.NewUser("first", "last", MustEmail(t, email), opts...)
 	require.NoError(t, err)
 	require.NoError(t, usr.SetHandle(handle))
 	return &usr

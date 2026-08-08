@@ -2,7 +2,9 @@ package domain
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -44,40 +46,65 @@ type User struct {
 	lastName  string
 	email     Email
 	handle    UserHandle // v1alpha calls this "username"
+
+	profile UserProfile
 }
 
-func NewUser(firstName, lastName string, email Email) (User, error) {
+type UserOption func(*User) error
+
+func NewUser(firstName, lastName string, email Email, opts ...UserOption) (User, error) {
+	var errs []error
 	if err := validateName(firstName, lastName); err != nil {
-		return User{}, err
+		errs = append(errs, err)
 	}
 	if email.IsZero() {
-		return User{}, fmt.Errorf("%w: email required", ErrInvalid)
+		errs = append(errs, fmt.Errorf("%w: email required", ErrInvalid))
 	}
 
-	return User{
+	u := User{
 		Aggregate: newAggregate(NewUserID()),
 		firstName: firstName,
 		lastName:  lastName,
 		email:     email,
-	}, nil
+		profile:   UserProfile{data: make(map[string]any)},
+	}
+
+	for _, opt := range opts {
+		errs = append(errs, opt(&u))
+	}
+
+	if err := errors.Join(errs...); err != nil {
+		return User{}, err
+	}
+
+	return u, nil
+}
+
+func WithBio(s string) UserOption {
+	return func(u *User) error {
+		return u.Profile().SetBio(s)
+	}
 }
 
 // RehydrateUser skips validation. Only repositories should call this.
 // It lives in the domain package so it can access unexported fields.
 func rehydrateUser(id UserID, firstName, lastName string, email Email, handle UserHandle, createdAt time.Time, version uint64) User {
+	profileData := make(map[string]any)
+	// TODO: rehydrate profile
 	return User{
 		Aggregate: rehydrateAggregate(id, createdAt, version),
 		firstName: firstName, lastName: lastName,
-		email: email, handle: handle,
+		email: email, handle: handle, profile: UserProfile{data: profileData},
 	}
 }
 
 // Getters — domain exposes read-only access.
 // ID and CreatedAt are promoted from the embedded [Aggregate].
-func (u User) FirstName() string  { return u.firstName }
-func (u User) LastName() string   { return u.lastName }
-func (u User) Email() Email       { return u.email }
-func (u User) Handle() UserHandle { return u.handle }
+func (u User) FirstName() string    { return u.firstName }
+func (u User) LastName() string     { return u.lastName }
+func (u User) Email() Email         { return u.email }
+func (u User) Handle() UserHandle   { return u.handle }
+func (u User) Profile() UserProfile { return u.profile }
 
 // Mutators — the only way to edit a User outside the domain. They take pointer
 // receivers (the getters stay value receivers) and run the same rules as
@@ -124,9 +151,59 @@ func (u *User) SetHandle(handle string) error {
 	return nil
 }
 
+var (
+	userProfileData = struct {
+		Bio string
+	}{
+		Bio: "bio",
+	}
+)
+
+type UserProfile struct {
+	data map[string]any
+}
+
+func (up UserProfile) set(key string, value any) {
+	up.data[key] = value
+}
+
+func (up UserProfile) delete(key string) {
+	up.data[key] = nil
+}
+
+// UserProfile - Getters & Setters
+const maxBioSize = 1024 * 1024     // 1 MB
+func (up UserProfile) Bio() string { return digOrZero[string](up.data, userProfileData.Bio) }
+func (up UserProfile) ClearBio()   { up.delete(userProfileData.Bio) }
+func (up UserProfile) SetBio(raw string) error {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return fmt.Errorf("%w: cannot be empty", ErrInvalid)
+	}
+	if len(s) > maxBioSize {
+		return fmt.Errorf("%w: must be less than 1 MB", ErrInvalid)
+	}
+
+	up.set(userProfileData.Bio, s)
+	return nil
+}
+
 func validateName(first, last string) error {
 	if first == "" || last == "" {
 		return fmt.Errorf("%w: first and last name required", ErrInvalid)
 	}
 	return nil
+}
+
+func digOrZero[T any](m map[string]any, key string) T {
+	var zero T
+	data, exist := m[key]
+	if !exist || data == nil {
+		return zero
+	}
+	v, ok := data.(T)
+	if !ok {
+		return zero
+	}
+	return v
 }

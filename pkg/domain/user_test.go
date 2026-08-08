@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 )
 
 func TestNewUser(t *testing.T) {
+	t.Parallel()
 	type args struct {
 		FirstName string
 		LastName  string
@@ -74,7 +76,6 @@ func TestNewUser(t *testing.T) {
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			t.Parallel()
 			args := validArgs
 			if tc.argsMod != nil {
 				tc.argsMod(&args)
@@ -95,6 +96,7 @@ func TestNewUser(t *testing.T) {
 	}
 }
 func TestUser_ChangeEmail(t *testing.T) {
+	t.Parallel()
 	t.Run("replaces the address", func(t *testing.T) {
 		usr := test.MustUser(t, "e@example.org", "changeEmail")
 		next, err := domain.NewEmail("next@example.org")
@@ -114,6 +116,7 @@ func TestUser_ChangeEmail(t *testing.T) {
 }
 
 func TestUser_Rename(t *testing.T) {
+	t.Parallel()
 	t.Run("replaces both name parts", func(t *testing.T) {
 		usr := test.MustUser(t, "e@example.org", "rename")
 
@@ -139,11 +142,12 @@ func TestUser_Rename(t *testing.T) {
 }
 
 func TestUser_SetHandle(t *testing.T) {
+	t.Parallel()
 	t.Run("replaces the handle", func(t *testing.T) {
 		usr := test.MustUser(t, "e@example.org", "setHandle")
 
 		require.NoError(t, usr.SetHandle("next"))
-		require.NotNil(t, usr.Handle())
+		require.NotZero(t, usr.Handle())
 		assert.Equal(t, test.MustUserHandle(t, "next"), usr.Handle())
 	})
 
@@ -158,8 +162,36 @@ func TestUser_SetHandle(t *testing.T) {
 		usr := test.MustUser(t, "e@example.org", "setHandleBlank")
 
 		require.ErrorIs(t, usr.SetHandle("   "), domain.ErrInvalid)
-		require.NotNil(t, usr.Handle(), "a rejected change must not mutate the user")
+		require.NotZero(t, usr.Handle(), "a rejected change must not mutate the user")
 		assert.Equal(t, test.MustUserHandle(t, "setHandleBlank"), usr.Handle())
+	})
+}
+
+func TestUser_SetBio(t *testing.T) {
+	t.Parallel()
+	t.Run("replaces the bio", func(t *testing.T) {
+		usr := test.MustUser(t, "e@example.org", "setBio", domain.WithBio("original"))
+		require.NoError(t, usr.Profile().SetBio("modified"))
+		require.NotZero(t, usr.Profile().Bio())
+		assert.Equal(t, "modified", usr.Profile().Bio())
+	})
+
+	t.Run("rejects empty", func(t *testing.T) {
+		usr := test.MustUser(t, "e@example.org", "setBio", domain.WithBio("original"))
+		require.ErrorIs(t, usr.Profile().SetBio(""), domain.ErrInvalid)
+		assert.Equal(t, "original", usr.Profile().Bio(), "a rejected change must not mutate the user")
+	})
+
+	t.Run("rejects blank", func(t *testing.T) {
+		usr := test.MustUser(t, "e@example.org", "setBio", domain.WithBio("original"))
+		require.ErrorIs(t, usr.Profile().SetBio("\t \t \n"), domain.ErrInvalid)
+		assert.Equal(t, "original", usr.Profile().Bio(), "a rejected change must not mutate the user")
+	})
+
+	t.Run("rejects input > 1 MB", func(t *testing.T) {
+		usr := test.MustUser(t, "e@example.org", "setBio", domain.WithBio("original"))
+		require.ErrorIs(t, usr.Profile().SetBio(strings.Repeat("0", 1024*1024+1)), domain.ErrInvalid)
+		assert.Equal(t, "original", usr.Profile().Bio(), "a rejected change must not mutate the user")
 	})
 }
 
