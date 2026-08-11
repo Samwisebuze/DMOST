@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/srd-5.2.1/combat.schema.json",
+  "title": "Combat, Resources, and Rest",
+  "description": "Derived combat totals with their breakdowns, the limited-use resource pools features draw on, and the rest timestamps that recharge them.",
+
+  "$defs": {
+    "combat": {
+      "type": "object",
+      "properties": {
+        "armor_class": {
+          "type": "object",
+          "properties": {
+            "total": { "type": "integer" },
+            "calculation": { "type": "string" },
+            "breakdown": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": { "label": { "type": "string" }, "value": { "type": "integer" } }
+              }
+            },
+            "override": { "type": ["integer", "null"] }
+          }
+        },
+        "initiative": { "type": "object" },
+        "speeds": {
+          "type": "object",
+          "properties": {
+            "walk": { "type": "integer" },
+            "fly": { "type": "integer" },
+            "swim": { "type": "integer" },
+            "climb": { "type": "integer" },
+            "burrow": { "type": "integer" },
+            "notes": { "type": ["string", "null"] }
+          }
+        },
+        "size": { "type": "string" },
+        "creature_type": { "type": "string" },
+        "senses": { "type": "object" },
+        "attunement": {
+          "type": "object",
+          "properties": {
+            "slots_maximum": { "type": "integer", "default": 3 },
+            "slots_used": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "carrying": {
+          "type": "object",
+          "properties": {
+            "capacity_lb": { "type": "number" },
+            "push_drag_lift_lb": { "type": "number" },
+            "encumbrance_variant_enabled": { "type": "boolean" },
+            "current_weight_lb": { "type": "number" }
+          }
+        }
+      }
+    },
+
+    "resource": {
+      "type": "object",
+      "required": ["resource_id", "name", "maximum", "current"],
+      "properties": {
+        "resource_id": { "type": "string" },
+        "name": { "type": "string" },
+        "maximum": { "type": "integer" },
+        "current": { "type": "integer" },
+        "recharge": { "enum": ["short_rest", "long_rest", "dawn", "dusk", "turn", "round", "never", "custom"] },
+        "recharge_custom": { "type": ["string", "null"] },
+        "source_feature": { "type": ["string", "null"] }
+      }
+    },
+
+    "restState": {
+      "type": "object",
+      "properties": {
+        "last_short_rest_at": { "type": ["string", "null"], "format": "date-time" },
+        "last_long_rest_at": { "type": ["string", "null"], "format": "date-time" },
+        "last_dawn_at": { "type": ["string", "null"], "format": "date-time" },
+        "pending_long_rest_choices": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

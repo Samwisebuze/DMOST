@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/srd-5.2.1/reputation.schema.json",
+  "title": "Reputation",
+  "description": "Standing with factions and individuals. Each group picks its own tracking mode (renown score, level-based, or narrative) and keeps an append-only ledger of the events that moved it.",
+
+  "$defs": {
+    "reputation": {
+      "type": "object",
+      "properties": {
+        "mode_default": { "enum": ["score", "level_based", "narrative"] },
+        "groups": { "type": "array", "items": { "$ref": "#/$defs/reputationGroup" } },
+        "individual_standing": { "type": "array", "items": { "type": "object" } },
+        "marks_of_prestige": { "type": "array", "items": { "type": "object" } },
+        "alternate_tracks": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+
+    "reputationGroup": {
+      "type": "object",
+      "required": ["group_id", "group_name", "tracking_mode"],
+      "properties": {
+        "group_id": { "type": "string" },
+        "group_name": { "type": "string" },
+        "group_kind": { "enum": ["faction", "guild", "organization", "community", "other"] },
+        "is_member": { "type": "boolean" },
+        "joined_at": { "type": ["string", "null"], "format": "date-time" },
+        "tracking_mode": { "enum": ["score", "level_based", "narrative"] },
+        "renown_score": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Starts at 0 and can never drop below 0 (srd@5.2.1)."
+        },
+        "renown_score_minimum": { "const": 0 },
+        "renown_score_maximum": { "type": ["integer", "null"] },
+        "is_party_shared_score": { "type": "boolean" },
+        "party_renown_score": { "type": ["integer", "null"] },
+        "level_based_equivalent": { "type": ["object", "null"] },
+        "rank": { "type": ["object", "null"] },
+        "default_attitude": { "enum": ["hostile", "indifferent", "friendly"] },
+        "recognition_achieved": {
+          "type": "boolean",
+          "description": "True at Renown 3+: respected member; other members default Friendly."
+        },
+        "perks_granted": { "type": "array", "items": { "type": "object" } },
+        "downtime_progress": {
+          "type": "object",
+          "description": "Renown +1 after days equal to 10 x current Renown Score, once at 1+.",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "days_accumulated": { "type": "integer", "minimum": 0 },
+            "days_required": { "type": "integer", "minimum": 0 },
+            "formula_snapshot": { "type": "string" },
+            "resets_on_score_increase": { "type": "boolean" },
+            "last_updated": { "type": ["string", "null"], "format": "date-time" }
+          }
+        },
+        "contacts": { "type": "array", "items": { "type": "object" } },
+        "notes": { "type": ["string", "null"] },
+        "ledger": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["event_id", "kind", "delta"],
+            "properties": {
+              "event_id": { "type": "string" },
+              "at": { "type": "string", "format": "date-time" },
+              "session_number": { "type": ["integer", "null"] },
+              "kind": { "enum": ["gain", "loss", "rank_change", "perk_granted", "perk_revoked", "note"] },
+              "delta": { "type": "integer" },
+              "score_after": { "type": "integer", "minimum": 0 },
+              "reason_category": { "enum": ["advanced_interests", "assigned_mission", "significant_quest", "downtime", "offense", "other"] },
+              "reason": { "type": "string" },
+              "awarded_by": { "type": ["string", "null"] },
+              "linked_currency_ledger_seq": { "type": ["integer", "null"] }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/srd-5.2.1/origin.schema.json",
+  "title": "Species and Background",
+  "description": "The two origin choices made at character creation. Under srd@5.2.1 the species carries traits and speed while the background carries the ability increases and the origin feat.",
+
+  "$defs": {
+    "species": {
+      "type": "object",
+      "required": ["instance_id", "name", "creature_type", "size", "base_walking_speed"],
+      "properties": {
+        "instance_id": { "type": "string" },
+        "name": { "type": "string" },
+        "parent_species": { "type": ["string", "null"] },
+        "sub_choice": {
+          "type": ["object", "null"],
+          "description": "Elf Lineage, Tiefling Legacy, Gnome Lineage, Goliath Giant Ancestry, Dragonborn Draconic Ancestry.",
+          "properties": {
+            "kind": { "enum": ["lineage", "legacy", "ancestry", "other"] },
+            "label": { "type": "string" },
+            "value": { "type": "string" }
+          }
+        },
+        "creature_type": { "type": "string" },
+        "size": { "enum": ["Tiny", "Small", "Medium", "Large", "Huge", "Gargantuan"] },
+        "size_options": { "type": "array", "items": { "type": "string" } },
+        "base_walking_speed": { "type": "integer", "minimum": 0 },
+        "traits": { "type": "array", "items": { "$ref": "#/$defs/speciesTrait" } },
+        "granted_spell_refs": { "type": "array", "items": { "type": "string" } },
+        "source_ref": { "$ref": "common.schema.json#/$defs/sourceRef" }
+      }
+    },
+
+    "speciesTrait": {
+      "type": "object",
+      "required": ["trait_id", "name"],
+      "properties": {
+        "trait_id": { "type": "string" },
+        "name": { "type": "string" },
+        "text_snapshot": { "type": "string" },
+        "range_ft": { "type": ["integer", "null"] },
+        "player_choice": { "type": ["string", "null"] }
+      }
+    },
+
+    "background": {
+      "type": "object",
+      "required": ["instance_id", "name"],
+      "properties": {
+        "instance_id": { "type": "string" },
+        "name": { "type": "string" },
+        "ability_scores_offered": {
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/abilityName" },
+          "maxItems": 3
+        },
+        "origin_feat": {
+          "type": ["object", "null"],
+          "properties": { "feat_instance_id": { "type": "string" }, "name": { "type": "string" } }
+        },
+        "skill_proficiencies_granted": { "type": "array", "items": { "type": "string" } },
+        "tool_proficiency_granted": { "type": ["string", "null"] },
+        "starting_equipment_choice": { "enum": ["package", "gold"] },
+        "starting_equipment_package": { "type": "array", "items": { "type": "string" } },
+        "starting_gold_alternative_gp": { "type": ["number", "null"] },
+        "is_custom": { "type": "boolean" },
+        "custom_definition": { "type": ["object", "null"] },
+        "source_ref": { "$ref": "common.schema.json#/$defs/sourceRef" }
+      }
+    }
+  }
+}

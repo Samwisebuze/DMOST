@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/srd-5.2.1/build-log.schema.json",
+  "title": "Build Log",
+  "description": "Append-only record of every build decision, in sequence, so a character's current state can be explained and a respec can be reasoned about.",
+
+  "$defs": {
+    "buildLogEntry": {
+      "type": "object",
+      "required": ["seq", "decision"],
+      "properties": {
+        "seq": { "type": "integer" },
+        "at": { "type": "string", "format": "date-time" },
+        "level": { "type": ["integer", "null"] },
+        "decision": {
+          "enum": [
+            "species_selected", "species_subchoice_selected", "background_selected",
+            "class_selected", "subclass_selected", "asi_slot_spent", "feat_taken",
+            "fighting_style_selected", "weapon_mastery_selected", "weapon_mastery_swapped",
+            "spell_prepared", "spell_swapped", "cantrip_swapped", "epic_boon_taken",
+            "level_gained", "respec", "other"
+          ]
+        },
+        "payload": { "type": "object" }
+      }
+    }
+  }
+}

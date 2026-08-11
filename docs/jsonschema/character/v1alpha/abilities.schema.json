@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/srd-5.2.1/abilities.schema.json",
+  "title": "Ability Scores and Allocation",
+  "description": "The six scores with their raw inputs and computed totals, plus the record of how the starting array and the background's increases were assigned.",
+
+  "$defs": {
+    "abilities": {
+      "type": "object",
+      "required": ["strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma"],
+      "additionalProperties": false,
+      "properties": {
+        "strength": { "$ref": "#/$defs/abilityScore" },
+        "dexterity": { "$ref": "#/$defs/abilityScore" },
+        "constitution": { "$ref": "#/$defs/abilityScore" },
+        "intelligence": { "$ref": "#/$defs/abilityScore" },
+        "wisdom": { "$ref": "#/$defs/abilityScore" },
+        "charisma": { "$ref": "#/$defs/abilityScore" }
+      }
+    },
+
+    "abilityScore": {
+      "type": "object",
+      "required": ["base_score", "total_score", "modifier", "maximum_allowed"],
+      "properties": {
+        "base_score": { "type": "integer", "minimum": 1 },
+        "base_source": { "enum": ["standard_array", "point_buy", "rolled", "custom"] },
+        "background_increase": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "feat_increases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "feat_instance_id": { "type": "string" },
+              "feat_name": { "type": "string" },
+              "amount": { "type": "integer" }
+            }
+          }
+        },
+        "other_increases": { "type": "array", "items": { "type": "object" } },
+        "override_score": { "type": ["integer", "null"] },
+        "override_source": { "type": ["string", "null"] },
+        "total_score": { "type": "integer", "minimum": 1, "maximum": 30 },
+        "modifier": { "type": "integer" },
+        "maximum_allowed": {
+          "type": "integer",
+          "description": "20 normally; 30 for a score raised by an Epic Boon.",
+          "enum": [20, 30]
+        },
+        "save_proficient": { "type": "boolean" },
+        "save_bonus_total": { "type": "integer" },
+        "save_misc_bonus": { "type": "integer" }
+      }
+    },
+
+    "abilityAllocation": {
+      "type": "object",
+      "description": "srd@5.2.1: ability increases come from the BACKGROUND, not the species.",
+      "properties": {
+        "generation_method": { "enum": ["standard_array", "point_buy", "rolled", "custom"] },
+        "standard_array_assignment": { "type": ["object", "null"] },
+        "point_buy_spend": { "type": ["object", "null"] },
+        "rolled_values": { "type": ["array", "null"], "items": { "type": "integer" } },
+        "background_allocation": {
+          "type": "object",
+          "required": ["pattern", "allocations"],
+          "properties": {
+            "pattern": { "enum": ["2_and_1", "1_1_1"] },
+            "allocations": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 3,
+              "items": {
+                "type": "object",
+                "required": ["ability", "amount"],
+                "properties": {
+                  "ability": { "$ref": "common.schema.json#/$defs/abilityName" },
+                  "amount": { "type": "integer", "minimum": 1, "maximum": 2 }
+                }
+              }
+            },
+            "eligible_abilities": {
+              "type": "array",
+              "items": { "$ref": "common.schema.json#/$defs/abilityName" },
+              "maxItems": 3
+            }
+          }
+        }
+      }
+    }
+  }
+}

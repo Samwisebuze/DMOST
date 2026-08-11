@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/srd-5.2.1/inventory.schema.json",
+  "title": "Inventory",
+  "description": "Carried items as entries against a nestable container tree, with a denormalized weight/attunement summary computed on write.",
+
+  "$defs": {
+    "inventory": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "object",
+          "properties": {
+            "total_weight_lb": { "type": "number" },
+            "carried_weight_lb": { "type": "number" },
+            "coin_weight_lb": { "type": "number", "description": "50 coins of any type weigh 1 lb." },
+            "carrying_capacity_lb": { "type": "number" },
+            "push_drag_lift_lb": { "type": "number" },
+            "encumbrance_variant_enabled": { "type": "boolean" },
+            "encumbrance_tier": { "enum": ["unencumbered", "encumbered", "heavily_encumbered", "over_capacity"] },
+            "attunement_slots_maximum": { "type": "integer" },
+            "attunement_slots_used": { "type": "integer" },
+            "computed_at": { "type": "string", "format": "date-time" }
+          }
+        },
+        "containers": { "type": "array", "items": { "$ref": "#/$defs/container" } },
+        "entries": { "type": "array", "items": { "$ref": "#/$defs/inventoryEntry" } },
+        "equipment_slots": { "type": "object" },
+        "transaction_log": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+
+    "container": {
+      "type": "object",
+      "required": ["container_instance_id", "name"],
+      "properties": {
+        "container_instance_id": { "type": "string" },
+        "name": { "type": "string" },
+        "container_kind": { "type": "string" },
+        "parent_container_id": { "type": ["string", "null"] },
+        "capacity_lb": { "type": ["number", "null"] },
+        "capacity_cubic_ft": { "type": ["number", "null"] },
+        "own_weight_lb": { "type": "number" },
+        "contents_are_weightless_to_carrier": { "type": "boolean" },
+        "is_extradimensional": { "type": "boolean" },
+        "overload_behavior_snapshot": { "type": ["string", "null"] }
+      }
+    },
+
+    "inventoryEntry": {
+      "type": "object",
+      "required": ["entry_id", "item_instance_id", "quantity", "storage_location"],
+      "properties": {
+        "entry_id": { "type": "string" },
+        "item_instance_id": { "type": "string" },
+        "item_name_cache": { "type": "string" },
+        "quantity": { "type": "integer", "minimum": 0 },
+        "quantity_expended_this_session": { "type": "integer" },
+        "quantity_recoverable": { "type": "integer" },
+        "weight_lb_total": { "type": "number" },
+        "storage_location": { "enum": ["carried", "stowed_elsewhere", "party_shared", "lost", "consumed"] },
+        "parent_container_id": { "type": ["string", "null"] },
+        "location_path_cache": { "type": "array", "items": { "type": "string" } },
+        "equipped": {
+          "type": "object",
+          "properties": {
+            "is_equipped": { "type": "boolean" },
+            "slot": { "type": ["string", "null"] },
+            "hands_used": { "type": "integer", "minimum": 0, "maximum": 2 },
+            "is_attuned": { "type": "boolean" },
+            "is_wielded_for_mastery": { "type": "boolean" }
+          }
+        },
+        "sort_order": { "type": "integer" },
+        "is_favorite": { "type": "boolean" },
+        "added_at": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}
