@@ -66,7 +66,7 @@
         "maximum": { "type": "integer" },
         "current": { "type": "integer" },
         "recharge": { "enum": ["short_rest", "long_rest", "dawn", "dusk", "turn", "round", "never", "custom"] },
-        "recharge_custom": { "type": ["string", "null"] },
+        "recharge_custom": { "type": "string" },
         "source_feature": { "type": ["string", "null"] }
       }
     },
