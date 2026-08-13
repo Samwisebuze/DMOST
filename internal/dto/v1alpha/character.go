@@ -33,3 +33,25 @@ type UpdateCharacterRequest struct {
 	// Omitting it means last writer wins. See [UpdateUserRequest.Version].
 	Version *uint64 `json:"version"`
 }
+
+// CharacterResponse is a stored sheet with the aggregate's identity and
+// revision alongside it.
+//
+// There is no list counterpart to this type — [character.CharacterRepository]
+// has only Save and Find, so no endpoint can return a collection yet.
+type CharacterResponse struct {
+	ID string `json:"id"`
+
+	// Sheet is the client's own bytes, carried out the same way they came in.
+	// Anything that decoded them into the generated schema type and re-encoded
+	// would silently drop every field that type has no home for, which is the
+	// one property this resource exists to keep.
+	Sheet json.RawMessage `json:"sheet"`
+
+	CreatedAt string `json:"created_at"`
+
+	// Version is the revision this representation was read at. Echo it in an
+	// [UpdateCharacterRequest] to make the write conditional. Unsigned so a
+	// negative number in a payload fails to decode rather than wrapping.
+	Version uint64 `json:"version"`
+}

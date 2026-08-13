@@ -49,6 +49,7 @@ func NewServer() *Server {
 
 	s.registerHealthRoutes(s.router)
 	s.registerUserRoutes(s.router)
+	s.registerCharacterRoutes(s.router)
 
 	endpoints := collectLeafPaths(s.router)
 	slog.Debug("http: routes registered", "routes", endpoints)
