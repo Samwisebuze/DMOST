@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/samwisebuze/dmost/internal/dto/v1alpha"
-	"github.com/samwisebuze/dmost/pkg/domain"
+	"github.com/samwisebuze/dmost/pkg/domain/user"
 )
 
 // UserService handles CRUD for the User resource.
@@ -17,17 +17,18 @@ type UserService interface {
 	// wire version. It does mean this layer is pinned to v1alpha. When a second
 	// version lands, the fix is a version-neutral command struct per use case,
 	// with each dto version mapping into it — not a second Create method.
-	Create(context.Context, v1alpha.CreateUserRequest) (domain.User, error)
+	Create(context.Context, v1alpha.CreateUserRequest) (user.User, error)
 
 	// Update loads the User, applies the request's populated fields, and saves
 	// it back. Attributes the request omits — including CreatedAt, which no
 	// request can carry — survive on the loaded aggregate.
 	//
-	// Returns [domain.ErrNotFound] if no such User exists, [domain.ErrExists]
-	// if the edit collides with another User, and [domain.ErrConflict] if the
-	// request carries a Version the stored User has moved past.
-	Update(context.Context, domain.UserID, v1alpha.UpdateUserRequest) (domain.User, error)
+	// Errors come from pkg/domain/common: ErrNotFound if no such User exists,
+	// ErrExists if the edit collides with another User, ErrConflict if the
+	// request carries a Version the stored User has moved past, and ErrInvalid
+	// if it carries a Version no client could have read.
+	Update(context.Context, user.UserID, v1alpha.UpdateUserRequest) (user.User, error)
 
-	FindAll(context.Context) ([]domain.User, error)
-	Find(context.Context, string) (domain.User, error)
+	FindAll(context.Context) ([]user.User, error)
+	Find(context.Context, string) (user.User, error)
 }

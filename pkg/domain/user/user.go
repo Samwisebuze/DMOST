@@ -1,4 +1,4 @@
-package domain
+package user
 
 import (
 	"context"
@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/samwisebuze/dmost/pkg/domain/common"
 )
 
 const (
@@ -19,12 +21,12 @@ type UserRepository interface {
 	// same [UserID]. Callers mutate an existing User by loading it with Find,
 	// applying changes, and passing it back.
 	//
-	// A replacement is a compare-and-set on Version: it succeeds only if the
-	// stored User is still at the version u was loaded at, and on success
-	// advances u to the newly stored version.
+	// A replacement is a compare-and-set on [common.Aggregate.Version]: it
+	// succeeds only if the stored User is still at the version u was loaded at,
+	// and on success advances u to the newly stored version.
 	//
-	// Returns [ErrExists] if another User already holds the email or username,
-	// and [ErrConflict] if the stored User has moved on.
+	// Returns [common.ErrExists] if another User already holds the email or
+	// username, and [common.ErrConflict] if the stored User has moved on.
 	Save(context.Context, *User) error
 
 	// FindAll returns all Users matching the filter.
@@ -32,7 +34,7 @@ type UserRepository interface {
 
 	// Find returns the user matching the UserID.
 	//
-	// Returns [ErrNotFound] if no such entity exists.
+	// Returns [common.ErrNotFound] if no such entity exists.
 	Find(context.Context, UserID) (User, error)
 
 	// Delete removes a user from the collection.
@@ -40,7 +42,7 @@ type UserRepository interface {
 }
 
 type User struct {
-	Aggregate[UserID]
+	common.Aggregate[UserID]
 
 	firstName string
 	lastName  string
@@ -58,11 +60,11 @@ func NewUser(firstName, lastName string, email Email, opts ...UserOption) (User,
 		errs = append(errs, err)
 	}
 	if email.IsZero() {
-		errs = append(errs, fmt.Errorf("%w: email required", ErrInvalid))
+		errs = append(errs, fmt.Errorf("%w: email required", common.ErrInvalid))
 	}
 
 	u := User{
-		Aggregate: newAggregate(NewUserID()),
+		Aggregate: common.NewAggregate(NewUserID()),
 		firstName: firstName,
 		lastName:  lastName,
 		email:     email,
@@ -88,11 +90,11 @@ func WithBio(s string) UserOption {
 
 // RehydrateUser skips validation. Only repositories should call this.
 // It lives in the domain package so it can access unexported fields.
-func rehydrateUser(id UserID, firstName, lastName string, email Email, handle UserHandle, createdAt time.Time, version uint64) User {
+func rehydrateUser(id UserID, firstName, lastName string, email Email, handle UserHandle, createdAt time.Time, version common.Version) User {
 	profileData := make(map[string]any)
 	// TODO: rehydrate profile
 	return User{
-		Aggregate: rehydrateAggregate(id, createdAt, version),
+		Aggregate: common.RehydrateAggregate(id, createdAt, version),
 		firstName: firstName, lastName: lastName,
 		email: email, handle: handle, profile: UserProfile{data: profileData},
 	}
@@ -119,7 +121,7 @@ func (u User) Profile() UserProfile { return u.profile }
 // conflict with another user's address.
 func (u *User) ChangeEmail(e Email) error {
 	if e.IsZero() {
-		return fmt.Errorf("%w: email required", ErrInvalid)
+		return fmt.Errorf("%w: email required", common.ErrInvalid)
 	}
 	u.email = e
 	return nil
@@ -178,10 +180,10 @@ func (up UserProfile) ClearBio()   { up.delete(userProfileData.Bio) }
 func (up UserProfile) SetBio(raw string) error {
 	s := strings.TrimSpace(raw)
 	if s == "" {
-		return fmt.Errorf("%w: cannot be empty", ErrInvalid)
+		return fmt.Errorf("%w: cannot be empty", common.ErrInvalid)
 	}
 	if len(s) > maxBioSize {
-		return fmt.Errorf("%w: must be less than 1 MB", ErrInvalid)
+		return fmt.Errorf("%w: must be less than 1 MB", common.ErrInvalid)
 	}
 
 	up.set(userProfileData.Bio, s)
@@ -190,7 +192,7 @@ func (up UserProfile) SetBio(raw string) error {
 
 func validateName(first, last string) error {
 	if first == "" || last == "" {
-		return fmt.Errorf("%w: first and last name required", ErrInvalid)
+		return fmt.Errorf("%w: first and last name required", common.ErrInvalid)
 	}
 	return nil
 }

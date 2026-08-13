@@ -12,7 +12,8 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/samwisebuze/dmost/internal/dto/v1alpha"
 	"github.com/samwisebuze/dmost/pkg/app"
-	"github.com/samwisebuze/dmost/pkg/domain"
+	"github.com/samwisebuze/dmost/pkg/domain/common"
+	domain "github.com/samwisebuze/dmost/pkg/domain/user"
 	"github.com/samwisebuze/dmost/pkg/http"
 	"github.com/samwisebuze/dmost/pkg/http/problem"
 	"github.com/stretchr/testify/assert"
@@ -68,8 +69,8 @@ func TestCreateHandler_ReturnsSuccess(t *testing.T) {
 	r := httptest.NewRequest("GET", "/", bytes.NewBuffer(bodyBytes))
 	handler(w, r)
 	resp := w.Result()
-	assert.Equal(t, resp.StatusCode, 201)
-	assert.Equal(t, resp.Header.Get("Content-Type"), v1alpha.ContentTypeUserJSON)
+	assert.Equal(t, 201, resp.StatusCode)
+	assert.Equal(t, v1alpha.ContentTypeUserJSON, resp.Header.Get("Content-Type"))
 }
 
 func TestCreateHandler_Returns500OnError(t *testing.T) {
@@ -91,15 +92,15 @@ func TestCreateHandler_Returns500OnError(t *testing.T) {
 	r := httptest.NewRequest("GET", "/", bytes.NewBuffer(bodyBytes))
 	handler(w, r)
 	resp := w.Result()
-	assert.Equal(t, resp.StatusCode, 500)
-	assert.Equal(t, resp.Header.Get("Content-Type"), problem.ContentTypeJSON)
+	assert.Equal(t, 500, resp.StatusCode)
+	assert.Equal(t, problem.ContentTypeJSON, resp.Header.Get("Content-Type"))
 }
 
 func TestCreateHandler_Returns422OnErrInvalid(t *testing.T) {
 	var app app.App
 	app.UserService = FakeUserService{
 		CreateFn: func(ctx context.Context, cur v1alpha.CreateUserRequest) (domain.User, error) {
-			return domain.User{}, domain.ErrInvalid
+			return domain.User{}, common.ErrInvalid
 		},
 	}
 
@@ -114,8 +115,8 @@ func TestCreateHandler_Returns422OnErrInvalid(t *testing.T) {
 	r := httptest.NewRequest("GET", "/", bytes.NewBuffer(bodyBytes))
 	handler(w, r)
 	resp := w.Result()
-	assert.Equal(t, resp.StatusCode, 422)
-	assert.Equal(t, resp.Header.Get("Content-Type"), problem.ContentTypeJSON)
+	assert.Equal(t, 422, resp.StatusCode)
+	assert.Equal(t, problem.ContentTypeJSON, resp.Header.Get("Content-Type"))
 }
 
 // updateRequest builds a PATCH carrying body, with the {id} route variable set
@@ -136,10 +137,10 @@ func TestUpdateHandler_MapsErrorsToStatus(t *testing.T) {
 		wantStatus int
 	}{
 		"success":              {nil, nethttp.StatusOK},
-		"unknown user":         {domain.ErrNotFound, nethttp.StatusNotFound},
-		"stale version":        {domain.ErrConflict, nethttp.StatusConflict},
-		"invalid edit":         {domain.ErrInvalid, nethttp.StatusUnprocessableEntity},
-		"duplicate email":      {domain.ErrExists, nethttp.StatusUnprocessableEntity},
+		"unknown user":         {common.ErrNotFound, nethttp.StatusNotFound},
+		"stale version":        {common.ErrConflict, nethttp.StatusConflict},
+		"invalid edit":         {common.ErrInvalid, nethttp.StatusUnprocessableEntity},
+		"duplicate email":      {common.ErrExists, nethttp.StatusUnprocessableEntity},
 		"unrecognised failure": {assert.AnError, nethttp.StatusInternalServerError},
 	}
 	for label, tc := range tests {
@@ -208,6 +209,6 @@ func TestCreateHandler_Returns400OnInvalidRequest(t *testing.T) {
 	r := httptest.NewRequest("GET", "/", strings.NewReader(""))
 	handler(w, r)
 	resp := w.Result()
-	assert.Equal(t, resp.StatusCode, 400)
-	assert.Equal(t, resp.Header.Get("Content-Type"), problem.ContentTypeJSON)
+	assert.Equal(t, 400, resp.StatusCode)
+	assert.Equal(t, problem.ContentTypeJSON, resp.Header.Get("Content-Type"))
 }

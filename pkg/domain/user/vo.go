@@ -1,4 +1,4 @@
-package domain
+package user
 
 import (
 	"errors"
@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/samwisebuze/dmost/pkg/domain/common"
 )
 
 type UserID string
@@ -14,7 +15,7 @@ type UserID string
 func NewUserID() UserID { return UserID(uuid.Must(uuid.NewV7()).String()) }
 func ParseUserID(raw string) (UserID, error) {
 	if err := uuid.Validate(raw); err != nil {
-		return "", fmt.Errorf("%w: %w", ErrInvalid, err)
+		return "", fmt.Errorf("%w: %w", common.ErrInvalid, err)
 	}
 
 	return UserID(uuid.MustParse(raw).String()), nil
@@ -60,12 +61,12 @@ func NewUserHandle(raw string) (UserHandle, error) {
 		return UserHandle{}, nil
 	}
 	if strings.TrimSpace(raw) == "" {
-		return UserHandle{}, fmt.Errorf("%w: handle must not be blank", ErrInvalid)
+		return UserHandle{}, fmt.Errorf("%w: handle must not be blank", common.ErrInvalid)
 	}
 	norm := strings.ToLower(strings.TrimSpace(raw))
 
 	if utf8.RuneCountInString(norm) > maxHandleChars {
-		return UserHandle{}, fmt.Errorf("%w: exceeds max length (%v)", ErrInvalid, maxHandleChars)
+		return UserHandle{}, fmt.Errorf("%w: exceeds max length (%v)", common.ErrInvalid, maxHandleChars)
 	}
 
 	return UserHandle{value: norm}, nil

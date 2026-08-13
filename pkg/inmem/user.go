@@ -5,7 +5,8 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/samwisebuze/dmost/pkg/domain"
+	"github.com/samwisebuze/dmost/pkg/domain/common"
+	domain "github.com/samwisebuze/dmost/pkg/domain/user"
 )
 
 type UserRepository struct {
@@ -37,8 +38,8 @@ func (r *UserRepository) Save(ctx context.Context, u *domain.User) error {
 	// version N and write back would otherwise silently lose one edit; the
 	// second one's compare-and-set fails here instead.
 	cur, update := r.data[u.ID()]
-	if update && cur.Version() != u.Version() {
-		return domain.ErrConflict
+	if update && !cur.Version().Equal(u.Version()) {
+		return common.ErrConflict
 	}
 
 	for _, usr := range r.data {
@@ -48,10 +49,10 @@ func (r *UserRepository) Save(ctx context.Context, u *domain.User) error {
 			continue
 		}
 		if usr.Email().Equal(u.Email()) {
-			return domain.ErrExists
+			return common.ErrExists
 		}
 		if u.Handle().Equal(usr.Handle()) {
-			return domain.ErrExists
+			return common.ErrExists
 		}
 	}
 
@@ -73,7 +74,7 @@ func (r *UserRepository) Find(_ context.Context, id domain.UserID) (domain.User,
 	defer r.mu.RUnlock()
 	u, found := r.data[id]
 	if !found {
-		return domain.User{}, domain.ErrNotFound
+		return domain.User{}, common.ErrNotFound
 	}
 	return *u, nil
 }

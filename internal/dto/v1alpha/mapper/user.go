@@ -14,22 +14,23 @@ import (
 	"time"
 
 	dto "github.com/samwisebuze/dmost/internal/dto/v1alpha"
-	"github.com/samwisebuze/dmost/pkg/domain"
+	"github.com/samwisebuze/dmost/pkg/domain/common"
+	"github.com/samwisebuze/dmost/pkg/domain/user"
 )
 
-var userFactory domain.UserFactory
+var userFactory user.UserFactory
 
 // Inbound: JSON → Domain
-func UserFromCreateRequest(req dto.CreateUserRequest) (domain.User, error) {
+func UserFromCreateRequest(req dto.CreateUserRequest) (user.User, error) {
 	var errs []error
 	firstName, lastName := splitName(req.Name)
 
-	email, err := domain.NewEmail(req.Email)
+	email, err := user.NewEmail(req.Email)
 	if err != nil {
 		errs = append(errs, err)
 	}
 
-	usr, err := domain.NewUser(firstName, lastName, email)
+	usr, err := user.NewUser(firstName, lastName, email)
 	if err != nil {
 		errs = append(errs, err)
 	}
@@ -37,7 +38,7 @@ func UserFromCreateRequest(req dto.CreateUserRequest) (domain.User, error) {
 	errs = append(errs, usr.SetHandle(req.Username))
 
 	if err := errors.Join(errs...); err != nil {
-		return domain.User{}, err
+		return user.User{}, err
 	}
 
 	return usr, nil
@@ -49,16 +50,16 @@ func UserFromCreateRequest(req dto.CreateUserRequest) (domain.User, error) {
 // mutators, leaving omitted ones untouched. It takes an existing User rather
 // than building one so identity and CreatedAt ride along on the aggregate the
 // caller loaded, instead of coming from the request.
-func ApplyUpdateRequest(u *domain.User, req dto.UpdateUserRequest) error {
+func ApplyUpdateRequest(u *user.User, req dto.UpdateUserRequest) error {
 	if req.Name != nil {
 		if err := u.Rename(splitName(*req.Name)); err != nil {
 			return err
 		}
 	}
 	if req.Email != nil {
-		email, err := domain.NewEmail(*req.Email)
+		email, err := user.NewEmail(*req.Email)
 		if err != nil {
-			return fmt.Errorf("%w: %w", domain.ErrInvalid, err)
+			return fmt.Errorf("%w: %w", common.ErrInvalid, err)
 		}
 		if err := u.ChangeEmail(email); err != nil {
 			return err
@@ -84,15 +85,18 @@ func splitName(name string) (first, last string) {
 }
 
 // Inbound: JSON → Domain
-func UserResponseToUser(res dto.UserResponse) domain.User {
-	email, _ := domain.NewEmail(res.Email)
-	username, _ := domain.NewUserHandle(*res.Username)
+func UserResponseToUser(res dto.UserResponse) user.User {
+	email, _ := user.NewEmail(res.Email)
+	username, _ := user.NewUserHandle(*res.Username)
 	createdAt, _ := time.Parse(time.RFC3339, res.CreatedAt)
-	return userFactory.Rehydrate(domain.UserID(res.ID), res.FirstName, res.LastName, email, username, createdAt, res.Version)
+	// Rehydrating, not parsing: this is a revision the server issued, so it is
+	// taken as given like every other field here.
+	version := common.RehydrateVersion(res.Version)
+	return userFactory.Rehydrate(user.UserID(res.ID), res.FirstName, res.LastName, email, username, createdAt, version)
 }
 
 // Outbound: Domain → JSON
-func UserToResponse(u domain.User) dto.UserResponse {
+func UserToResponse(u user.User) dto.UserResponse {
 	var handle *string
 	if !u.Handle().IsZero() {
 		handle = new(u.Handle().String())
@@ -106,11 +110,11 @@ func UserToResponse(u domain.User) dto.UserResponse {
 		CreatedAt: u.CreatedAt().Format(time.RFC3339),
 		// Without this the client reads version 0 and can never make a
 		// conditional update stick.
-		Version: u.Version(),
+		Version: u.Version().Uint64(),
 	}
 }
 
-func UserCollectionToResponse(usrs []domain.User) dto.UsersListResponse {
+func UserCollectionToResponse(usrs []user.User) dto.UsersListResponse {
 	data := make([]dto.UserResponse, 0, len(usrs))
 	for _, u := range usrs {
 		data = append(data, UserToResponse(u))
@@ -121,8 +125,8 @@ func UserCollectionToResponse(usrs []domain.User) dto.UsersListResponse {
 	}
 }
 
-func UserListResponseToUsers(res dto.UsersListResponse) []domain.User {
-	data := make([]domain.User, 0, res.Count)
+func UserListResponseToUsers(res dto.UsersListResponse) []user.User {
+	data := make([]user.User, 0, res.Count)
 	for _, u := range res.Data {
 		data = append(data, UserResponseToUser(u))
 	}

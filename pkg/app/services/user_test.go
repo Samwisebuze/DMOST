@@ -7,7 +7,8 @@ import (
 	"github.com/samwisebuze/dmost/internal/dto/v1alpha"
 	"github.com/samwisebuze/dmost/internal/test"
 	"github.com/samwisebuze/dmost/pkg/app/services"
-	"github.com/samwisebuze/dmost/pkg/domain"
+	"github.com/samwisebuze/dmost/pkg/domain/common"
+	"github.com/samwisebuze/dmost/pkg/domain/user"
 	"github.com/samwisebuze/dmost/pkg/inmem"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,7 +17,7 @@ import (
 func ptr[T any](v T) *T { return &v }
 
 // seed puts one user in a fresh repository and returns both.
-func seed(t *testing.T, email, handle string) (*services.UserService, *domain.User) {
+func seed(t *testing.T, email, handle string) (*services.UserService, *user.User) {
 	t.Helper()
 	repo := inmem.NewUserRepository()
 	usr := test.MustUser(t, email, handle)
@@ -103,7 +104,7 @@ func TestUserService_Update(t *testing.T) {
 		sut := services.NewUserService(repo)
 
 		_, err := sut.Update(context.Background(), usr.ID(), v1alpha.UpdateUserRequest{Email: ptr("taken@example.org")})
-		require.ErrorIs(t, err, domain.ErrExists)
+		require.ErrorIs(t, err, common.ErrExists)
 	})
 
 	t.Run("accepts the version the client last read", func(t *testing.T) {
@@ -111,18 +112,18 @@ func TestUserService_Update(t *testing.T) {
 
 		got, err := sut.Update(context.Background(), usr.ID(), v1alpha.UpdateUserRequest{
 			Name:    ptr("Ada Lovelace"),
-			Version: ptr(usr.Version()),
+			Version: ptr(usr.Version().Uint64()),
 		})
 		require.NoError(t, err)
 		assert.Equal(t, "Ada", got.FirstName())
-		assert.EqualValues(t, usr.Version()+1, got.Version(), "the response carries the new revision")
+		assert.Equal(t, usr.Version().Next(), got.Version(), "the response carries the new revision")
 	})
 
 	t.Run("reports a stale version", func(t *testing.T) {
 		// The client read version 1, someone else wrote, and now its edit is
 		// based on a state that no longer exists.
 		sut, usr := seed(t, "a@example.org", "alice")
-		stale := usr.Version()
+		stale := usr.Version().Uint64()
 
 		_, err := sut.Update(context.Background(), usr.ID(), v1alpha.UpdateUserRequest{Name: ptr("Ada Lovelace")})
 		require.NoError(t, err)
@@ -131,7 +132,7 @@ func TestUserService_Update(t *testing.T) {
 			Name:    ptr("Grace Hopper"),
 			Version: ptr(stale),
 		})
-		require.ErrorIs(t, err, domain.ErrConflict)
+		require.ErrorIs(t, err, common.ErrConflict)
 
 		users, err := sut.FindAll(context.Background())
 		require.NoError(t, err)
@@ -149,18 +150,29 @@ func TestUserService_Update(t *testing.T) {
 		assert.Equal(t, "Grace", got.FirstName())
 	})
 
+	t.Run("rejects a version no client can have read", func(t *testing.T) {
+		// Zero is the revision of a user that was never stored.
+		sut, usr := seed(t, "a@example.org", "alice")
+
+		_, err := sut.Update(context.Background(), usr.ID(), v1alpha.UpdateUserRequest{
+			Name:    ptr("Ada Lovelace"),
+			Version: ptr(uint64(0)),
+		})
+		require.ErrorIs(t, err, common.ErrInvalid)
+	})
+
 	t.Run("reports an unknown user", func(t *testing.T) {
 		sut, _ := seed(t, "a@example.org", "alice")
 
-		_, err := sut.Update(context.Background(), domain.NewUserID(), v1alpha.UpdateUserRequest{Name: ptr("Ada Lovelace")})
-		require.ErrorIs(t, err, domain.ErrNotFound)
+		_, err := sut.Update(context.Background(), user.NewUserID(), v1alpha.UpdateUserRequest{Name: ptr("Ada Lovelace")})
+		require.ErrorIs(t, err, common.ErrNotFound)
 	})
 
 	t.Run("rejects an invalid edit without touching the store", func(t *testing.T) {
 		sut, usr := seed(t, "a@example.org", "alice")
 
 		_, err := sut.Update(context.Background(), usr.ID(), v1alpha.UpdateUserRequest{Name: ptr("Cher")})
-		require.ErrorIs(t, err, domain.ErrInvalid)
+		require.ErrorIs(t, err, common.ErrInvalid)
 
 		users, err := sut.FindAll(context.Background())
 		require.NoError(t, err)

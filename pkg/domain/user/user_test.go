@@ -1,4 +1,4 @@
-package domain_test
+package user_test
 
 import (
 	"strings"
@@ -7,7 +7,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/samwisebuze/dmost/internal/test"
-	"github.com/samwisebuze/dmost/pkg/domain"
+	"github.com/samwisebuze/dmost/pkg/domain/common"
+	"github.com/samwisebuze/dmost/pkg/domain/user"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -17,7 +18,7 @@ func TestNewUser(t *testing.T) {
 	type args struct {
 		FirstName string
 		LastName  string
-		Email     domain.Email
+		Email     user.Email
 	}
 
 	validArgs := args{
@@ -33,9 +34,9 @@ func TestNewUser(t *testing.T) {
 	}{
 		"success": {
 			assert: func(tt require.TestingT, v interface{}, _ ...interface{}) {
-				var u domain.User
+				var u user.User
 				require.NotPanics(tt, func() {
-					u = v.(domain.User)
+					u = v.(user.User)
 				})
 
 				assert.Equal(tt, validArgs.FirstName, u.FirstName(), "first name mismatch, check golden values")
@@ -50,9 +51,9 @@ func TestNewUser(t *testing.T) {
 		},
 		"id is uuid v7": {
 			assert: func(tt require.TestingT, v interface{}, _ ...interface{}) {
-				var u domain.User
+				var u user.User
 				require.NotPanics(tt, func() {
-					u = v.(domain.User)
+					u = v.(user.User)
 				})
 				uid, err := uuid.Parse(u.ID().String())
 				assert.NoError(tt, err, "id is not a valid uuid")
@@ -69,7 +70,7 @@ func TestNewUser(t *testing.T) {
 		},
 		"email required": {
 			argsMod: func(a *args) {
-				a.Email = domain.Email{}
+				a.Email = user.Email{}
 			},
 			wantErr: true,
 		},
@@ -81,10 +82,10 @@ func TestNewUser(t *testing.T) {
 				tc.argsMod(&args)
 			}
 
-			got, err := domain.NewUser(args.FirstName, args.LastName, args.Email)
+			got, err := user.NewUser(args.FirstName, args.LastName, args.Email)
 			if tc.wantErr {
 				require.Error(t, err)
-				require.ErrorIs(t, err, domain.ErrInvalid)
+				require.ErrorIs(t, err, common.ErrInvalid)
 				return
 			}
 			require.NoError(t, err)
@@ -99,7 +100,7 @@ func TestUser_ChangeEmail(t *testing.T) {
 	t.Parallel()
 	t.Run("replaces the address", func(t *testing.T) {
 		usr := test.MustUser(t, "e@example.org", "changeEmail")
-		next, err := domain.NewEmail("next@example.org")
+		next, err := user.NewEmail("next@example.org")
 		require.NoError(t, err)
 
 		require.NoError(t, usr.ChangeEmail(next))
@@ -110,7 +111,7 @@ func TestUser_ChangeEmail(t *testing.T) {
 		usr := test.MustUser(t, "e@example.org", "zeroEmail")
 		before := usr.Email()
 
-		require.ErrorIs(t, usr.ChangeEmail(domain.Email{}), domain.ErrInvalid)
+		require.ErrorIs(t, usr.ChangeEmail(user.Email{}), common.ErrInvalid)
 		assert.Equal(t, before, usr.Email(), "a rejected change must not mutate the user")
 	})
 }
@@ -133,7 +134,7 @@ func TestUser_Rename(t *testing.T) {
 		} {
 			t.Run(name, func(t *testing.T) {
 				usr := test.MustUser(t, "e@example.org", "renameMissingPart")
-				require.ErrorIs(t, usr.Rename(args[0], args[1]), domain.ErrInvalid)
+				require.ErrorIs(t, usr.Rename(args[0], args[1]), common.ErrInvalid)
 				assert.Equal(t, "first", usr.FirstName(), "a rejected rename must not mutate the user")
 				assert.Equal(t, "last", usr.LastName())
 			})
@@ -161,7 +162,7 @@ func TestUser_SetHandle(t *testing.T) {
 	t.Run("rejects a blank handle", func(t *testing.T) {
 		usr := test.MustUser(t, "e@example.org", "setHandleBlank")
 
-		require.ErrorIs(t, usr.SetHandle("   "), domain.ErrInvalid)
+		require.ErrorIs(t, usr.SetHandle("   "), common.ErrInvalid)
 		require.NotZero(t, usr.Handle(), "a rejected change must not mutate the user")
 		assert.Equal(t, test.MustUserHandle(t, "setHandleBlank"), usr.Handle())
 	})
@@ -170,27 +171,27 @@ func TestUser_SetHandle(t *testing.T) {
 func TestUser_SetBio(t *testing.T) {
 	t.Parallel()
 	t.Run("replaces the bio", func(t *testing.T) {
-		usr := test.MustUser(t, "e@example.org", "setBio", domain.WithBio("original"))
+		usr := test.MustUser(t, "e@example.org", "setBio", user.WithBio("original"))
 		require.NoError(t, usr.Profile().SetBio("modified"))
 		require.NotZero(t, usr.Profile().Bio())
 		assert.Equal(t, "modified", usr.Profile().Bio())
 	})
 
 	t.Run("rejects empty", func(t *testing.T) {
-		usr := test.MustUser(t, "e@example.org", "setBio", domain.WithBio("original"))
-		require.ErrorIs(t, usr.Profile().SetBio(""), domain.ErrInvalid)
+		usr := test.MustUser(t, "e@example.org", "setBio", user.WithBio("original"))
+		require.ErrorIs(t, usr.Profile().SetBio(""), common.ErrInvalid)
 		assert.Equal(t, "original", usr.Profile().Bio(), "a rejected change must not mutate the user")
 	})
 
 	t.Run("rejects blank", func(t *testing.T) {
-		usr := test.MustUser(t, "e@example.org", "setBio", domain.WithBio("original"))
-		require.ErrorIs(t, usr.Profile().SetBio("\t \t \n"), domain.ErrInvalid)
+		usr := test.MustUser(t, "e@example.org", "setBio", user.WithBio("original"))
+		require.ErrorIs(t, usr.Profile().SetBio("\t \t \n"), common.ErrInvalid)
 		assert.Equal(t, "original", usr.Profile().Bio(), "a rejected change must not mutate the user")
 	})
 
 	t.Run("rejects input > 1 MB", func(t *testing.T) {
-		usr := test.MustUser(t, "e@example.org", "setBio", domain.WithBio("original"))
-		require.ErrorIs(t, usr.Profile().SetBio(strings.Repeat("0", 1024*1024+1)), domain.ErrInvalid)
+		usr := test.MustUser(t, "e@example.org", "setBio", user.WithBio("original"))
+		require.ErrorIs(t, usr.Profile().SetBio(strings.Repeat("0", 1024*1024+1)), common.ErrInvalid)
 		assert.Equal(t, "original", usr.Profile().Bio(), "a rejected change must not mutate the user")
 	})
 }
@@ -202,7 +203,7 @@ func TestUser_MutatorsPreserveIdentity(t *testing.T) {
 
 	id, createdAt := usr.ID(), usr.CreatedAt()
 
-	next, err := domain.NewEmail("next@example.org")
+	next, err := user.NewEmail("next@example.org")
 	require.NoError(t, err)
 	require.NoError(t, usr.ChangeEmail(next))
 	require.NoError(t, usr.Rename("Ada", "Lovelace"))

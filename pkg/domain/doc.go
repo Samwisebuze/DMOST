@@ -4,16 +4,19 @@
 // DDD concepts encountered here:
 //
 //   - Aggregate root.
-//     [Aggregate] is the generic base every root embeds for identity, CreatedAt, and version.
+//     [github.com/samwisebuze/dmost/pkg/domain/common.Aggregate] is the generic
+//     base every root composes for identity, CreatedAt, and version.
 //     An aggregate is the unit of invariant enforcement and the unit a
 //     repository loads and saves atomically.
-//     ex. [User] is an aggregate root;
+//     ex. [github.com/samwisebuze/dmost/pkg/domain/user.User] is an aggregate root;
 //
 //   - Entity.
-//     Distinguished by identity (eg. [ID]), not attribute equality.
+//     Distinguished by identity (eg.
+//     [github.com/samwisebuze/dmost/pkg/domain/common.ID]), not attribute equality.
 //     Fields stay unexported behind read-only getters so all mutation
-//     routes through methods that can enforce invariants (e.g. [User.Rename]
-//     rejects a blank half of a name).
+//     routes through methods that can enforce invariants (e.g.
+//     [github.com/samwisebuze/dmost/pkg/domain/user.User.Rename] rejects a
+//     blank half of a name).
 //
 //   - Value object.
 //     Distinguished by attribute equality, not identity, and are immutable once constructed.
@@ -33,10 +36,17 @@
 //     The domain only defines the contract it needs, and infrastructure (ex. pkg/inmem) satisfy  it.
 //
 //   - Optimistic concurrency.
-//     Not a domain rule but a persistence concern threaded through the [Aggregate] type: a repository
-//     compare-and-sets on it and returns [ErrConflict] on a lost update.
-//     Mutators never touch it; only [UserFactory.NextVersion] does, and only
-//     after a successful compare-and-set.
+//     Not a domain rule but a persistence concern threaded through the
+//     [github.com/samwisebuze/dmost/pkg/domain/common.Version] an aggregate
+//     composes: a repository compare-and-sets on it and returns
+//     [github.com/samwisebuze/dmost/pkg/domain/common.ErrConflict] on a lost
+//     update. Mutators never touch it; only a factory's NextVersion does, and
+//     only after a successful compare-and-set.
+//
+//     That restriction is enforced by the compiler rather than by convention.
+//     Advancing a version takes a token from pkg/domain/internal/lock, which
+//     only packages under pkg/domain can import, so an adapter has no route to
+//     it except through the aggregate's factory.
 //
 //   - Sentinel errors as ubiquitous language. Callers match with errors.Is.
 package domain

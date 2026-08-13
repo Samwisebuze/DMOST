@@ -14,7 +14,8 @@ import (
 	"github.com/samwisebuze/dmost/internal/dto/v1alpha"
 	"github.com/samwisebuze/dmost/internal/dto/v1alpha/mapper"
 	"github.com/samwisebuze/dmost/pkg/app"
-	"github.com/samwisebuze/dmost/pkg/domain"
+	"github.com/samwisebuze/dmost/pkg/domain/common"
+	"github.com/samwisebuze/dmost/pkg/domain/user"
 	"github.com/samwisebuze/dmost/pkg/http/problem"
 )
 
@@ -32,7 +33,7 @@ func (s *Server) registerUserRoutes(router *mux.Router) {
 type Client struct {
 	client     *http.Client
 	urls       urlBuilder
-	usrFactory domain.UserFactory
+	usrFactory user.UserFactory
 
 	server string
 }
@@ -70,7 +71,7 @@ func (u urlBuilder) ListAll() string {
 	return fmt.Sprintf("%s/users", u.Server)
 }
 
-func (u urlBuilder) Update(id domain.UserID) string {
+func (u urlBuilder) Update(id user.UserID) string {
 	return fmt.Sprintf("%s/users/%s", u.Server, url.PathEscape(id.String()))
 }
 
@@ -88,7 +89,7 @@ func CreateUserHandler(app *app.App) http.HandlerFunc {
 		}
 
 		usr, err := app.UserService.Create(r.Context(), req)
-		if errors.Is(err, domain.ErrInvalid) {
+		if errors.Is(err, common.ErrInvalid) {
 			problem.New().
 				Wrap(err).
 				Of(http.StatusUnprocessableEntity).
@@ -104,7 +105,6 @@ func CreateUserHandler(app *app.App) http.HandlerFunc {
 			return
 		}
 
-		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(NewWriter(w).
 			ContentType(v1alpha.ContentTypeUserJSON).
 			Status(http.StatusCreated),
@@ -112,28 +112,28 @@ func CreateUserHandler(app *app.App) http.HandlerFunc {
 	}
 }
 
-func (c *Client) Create(ctx context.Context, req v1alpha.CreateUserRequest) (domain.User, error) {
+func (c *Client) Create(ctx context.Context, req v1alpha.CreateUserRequest) (user.User, error) {
 	raw, err := json.Marshal(req)
 	if err != nil {
-		return domain.User{}, fmt.Errorf("POST %q: %w", c.urls.Create(), err)
+		return user.User{}, fmt.Errorf("POST %q: %w", c.urls.Create(), err)
 	}
 	resp, err := c.client.Post(c.urls.Create(), v1alpha.ContentTypeJSON, bytes.NewBuffer(raw))
 	if err != nil {
-		return domain.User{}, fmt.Errorf("POST %q failed: %w", c.urls.Create(), err)
+		return user.User{}, fmt.Errorf("POST %q failed: %w", c.urls.Create(), err)
 	}
 	defer resp.Body.Close()
 	decoder := json.NewDecoder(resp.Body)
 	if resp.StatusCode != 201 {
 		var err problem.Problem
 		if err := decoder.Decode(&err); err != nil {
-			return domain.User{}, fmt.Errorf("POST %q: unprocessable response [code=%q]: %w", c.urls.Create(), resp.Status, err)
+			return user.User{}, fmt.Errorf("POST %q: unprocessable response [code=%q]: %w", c.urls.Create(), resp.Status, err)
 		}
-		return domain.User{}, fmt.Errorf("POST %q: %w", c.urls.Create(), &err)
+		return user.User{}, fmt.Errorf("POST %q: %w", c.urls.Create(), &err)
 	}
 
 	data, err := decode[v1alpha.UserResponse](resp)
 	if err != nil {
-		return domain.User{}, fmt.Errorf("POST %q: %w", c.urls.Create(), err)
+		return user.User{}, fmt.Errorf("POST %q: %w", c.urls.Create(), err)
 	}
 
 	return mapper.UserResponseToUser(data), nil
@@ -141,7 +141,7 @@ func (c *Client) Create(ctx context.Context, req v1alpha.CreateUserRequest) (dom
 
 func UpdateUserHandler(app *app.App) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id := domain.UserID(mux.Vars(r)["id"])
+		id := user.UserID(mux.Vars(r)["id"])
 
 		var req v1alpha.UpdateUserRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -156,7 +156,7 @@ func UpdateUserHandler(app *app.App) http.HandlerFunc {
 
 		usr, err := app.UserService.Update(r.Context(), id, req)
 		switch {
-		case errors.Is(err, domain.ErrNotFound):
+		case errors.Is(err, common.ErrNotFound):
 			problem.New().
 				Wrap(err).
 				Of(http.StatusNotFound).
@@ -165,13 +165,13 @@ func UpdateUserHandler(app *app.App) http.HandlerFunc {
 		// Checked before ErrInvalid because a conflict is not a bad request:
 		// the edit was well formed, it just lost a race. Retrying it verbatim
 		// is wrong, so it must not look like a 422 the client can fix.
-		case errors.Is(err, domain.ErrConflict):
+		case errors.Is(err, common.ErrConflict):
 			problem.New().
 				Wrap(err).
 				Of(http.StatusConflict).
 				WriteTo(w)
 			return
-		case errors.Is(err, domain.ErrInvalid):
+		case errors.Is(err, common.ErrInvalid):
 			problem.New().
 				Wrap(err).
 				Of(http.StatusUnprocessableEntity).
@@ -192,35 +192,35 @@ func UpdateUserHandler(app *app.App) http.HandlerFunc {
 	}
 }
 
-func (c *Client) UpdateUser(ctx context.Context, id domain.UserID, req v1alpha.UpdateUserRequest) (domain.User, error) {
+func (c *Client) UpdateUser(ctx context.Context, id user.UserID, req v1alpha.UpdateUserRequest) (user.User, error) {
 	raw, err := json.Marshal(req)
 	if err != nil {
-		return domain.User{}, fmt.Errorf("PATCH %q: %w", c.urls.Update(id), err)
+		return user.User{}, fmt.Errorf("PATCH %q: %w", c.urls.Update(id), err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPatch, c.urls.Update(id), bytes.NewBuffer(raw))
 	if err != nil {
-		return domain.User{}, fmt.Errorf("PATCH %q: %w", c.urls.Update(id), err)
+		return user.User{}, fmt.Errorf("PATCH %q: %w", c.urls.Update(id), err)
 	}
 	httpReq.Header.Set("Content-Type", v1alpha.ContentTypeJSON)
 
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
-		return domain.User{}, fmt.Errorf("PATCH %q failed: %w", c.urls.Update(id), err)
+		return user.User{}, fmt.Errorf("PATCH %q failed: %w", c.urls.Update(id), err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		var prob problem.Problem
 		if err := json.NewDecoder(resp.Body).Decode(&prob); err != nil {
-			return domain.User{}, fmt.Errorf("PATCH %q: unprocessable response [code=%q]: %w", c.urls.Update(id), resp.Status, err)
+			return user.User{}, fmt.Errorf("PATCH %q: unprocessable response [code=%q]: %w", c.urls.Update(id), resp.Status, err)
 		}
-		return domain.User{}, fmt.Errorf("PATCH %q: %w", c.urls.Update(id), &prob)
+		return user.User{}, fmt.Errorf("PATCH %q: %w", c.urls.Update(id), &prob)
 	}
 
 	data, err := decode[v1alpha.UserResponse](resp)
 	if err != nil {
-		return domain.User{}, fmt.Errorf("PATCH %q: %w", c.urls.Update(id), err)
+		return user.User{}, fmt.Errorf("PATCH %q: %w", c.urls.Update(id), err)
 	}
 
 	return mapper.UserResponseToUser(data), nil
@@ -243,7 +243,7 @@ func ListUsersHandler(app *app.App) http.HandlerFunc {
 	}
 }
 
-func (c *Client) Users(ctx context.Context) ([]domain.User, error) {
+func (c *Client) Users(ctx context.Context) ([]user.User, error) {
 	resp, err := c.client.Get(c.urls.ListAll())
 	if err != nil {
 		return nil, fmt.Errorf("client error: %w", err)
@@ -279,7 +279,7 @@ func FindUserHandler(app *app.App) http.HandlerFunc {
 			return
 		}
 		user, err := app.UserService.Find(r.Context(), id)
-		if errors.Is(err, domain.ErrNotFound) {
+		if errors.Is(err, common.ErrNotFound) {
 			problem.New().
 				Title("not found").
 				Wrap(err).

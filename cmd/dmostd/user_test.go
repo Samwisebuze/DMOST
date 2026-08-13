@@ -6,7 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/samwisebuze/dmost/internal/dto/v1alpha"
-	"github.com/samwisebuze/dmost/pkg/domain"
+	domain "github.com/samwisebuze/dmost/pkg/domain/user"
 	"github.com/samwisebuze/dmost/pkg/http"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -59,7 +59,7 @@ func TestUsersAPI_Update(t *testing.T) {
 	name := "Ada Lovelace"
 	got, err := cli.UpdateUser(context.Background(), usr.ID(), v1alpha.UpdateUserRequest{
 		Name:    &name,
-		Version: ptr(usr.Version()),
+		Version: ptr(usr.Version().Uint64()),
 	})
 	require.NoError(t, err)
 
@@ -68,7 +68,7 @@ func TestUsersAPI_Update(t *testing.T) {
 	assert.Equal(t, usr.ID(), got.ID())
 	assert.Equal(t, usr.Email(), got.Email(), "an omitted field must survive the round trip")
 	assert.Equal(t, usr.CreatedAt(), got.CreatedAt())
-	assert.Equal(t, usr.Version()+1, got.Version(), "the client must learn the new revision")
+	assert.Equal(t, usr.Version().Next(), got.Version(), "the client must learn the new revision")
 }
 
 func TestUsersAPI_UpdateRejectsAStaleVersion(t *testing.T) {
@@ -79,7 +79,7 @@ func TestUsersAPI_UpdateRejectsAStaleVersion(t *testing.T) {
 
 	cli := MustClient(t, m.HTTPServer.URL())
 	usr := MustCreateUser(t, cli)
-	stale := usr.Version()
+	stale := usr.Version().Uint64()
 
 	first := "Ada Lovelace"
 	_, err := cli.UpdateUser(context.Background(), usr.ID(), v1alpha.UpdateUserRequest{Name: &first, Version: ptr(stale)})

@@ -8,7 +8,8 @@ import (
 	"testing"
 
 	"github.com/samwisebuze/dmost/internal/test"
-	"github.com/samwisebuze/dmost/pkg/domain"
+	"github.com/samwisebuze/dmost/pkg/domain/common"
+	"github.com/samwisebuze/dmost/pkg/domain/user"
 	"github.com/samwisebuze/dmost/pkg/inmem"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,7 +31,7 @@ func TestUserRepository_Save(t *testing.T) {
 		require.NoError(t, sut.Save(context.Background(), test.MustUser(t, "a@example.org", "alice")))
 		require.NoError(t, sut.Save(context.Background(), test.MustUser(t, "b@example.org", "bob")))
 
-		users, err := sut.FindAll(context.Background(), domain.UserFilter{})
+		users, err := sut.FindAll(context.Background(), user.UserFilter{})
 		require.NoError(t, err)
 		assert.Len(t, users, 2)
 	})
@@ -39,12 +40,12 @@ func TestUserRepository_Save(t *testing.T) {
 		// Save is an upsert keyed by UserID: a known ID is an update, not a
 		// collision.
 		sut := inmem.NewUserRepository()
-		id := domain.NewUserID()
+		id := user.NewUserID()
 		require.NoError(t, sut.Save(context.Background(), test.MustRehydrateUser(t, id, 1)))
 
 		require.NoError(t, sut.Save(context.Background(), test.MustRehydrateUser(t, id, 2)))
 
-		users, err := sut.FindAll(context.Background(), domain.UserFilter{})
+		users, err := sut.FindAll(context.Background(), user.UserFilter{})
 		require.NoError(t, err)
 		require.Len(t, users, 1, "an update must not insert a second record")
 		assert.Equal(t, "user2@example.org", users[0].Email().String())
@@ -66,11 +67,11 @@ func TestUserRepository_Save(t *testing.T) {
 		usr := test.MustUser(t, "b@example.org", "bob")
 		require.NoError(t, sut.Save(context.Background(), usr))
 
-		taken, err := domain.NewEmail("taken@example.org")
+		taken, err := user.NewEmail("taken@example.org")
 		require.NoError(t, err)
 		require.NoError(t, usr.ChangeEmail(taken))
 
-		require.ErrorIs(t, sut.Save(context.Background(), usr), domain.ErrExists)
+		require.ErrorIs(t, sut.Save(context.Background(), usr), common.ErrExists)
 
 		stored, err := sut.Find(context.Background(), usr.ID())
 		require.NoError(t, err)
@@ -85,7 +86,7 @@ func TestUserRepository_Save(t *testing.T) {
 
 		require.NoError(t, usr.SetHandle("taken"))
 
-		require.ErrorIs(t, sut.Save(context.Background(), usr), domain.ErrExists)
+		require.ErrorIs(t, sut.Save(context.Background(), usr), common.ErrExists)
 	})
 
 	t.Run("an insert keeps the constructed version", func(t *testing.T) {
@@ -95,7 +96,7 @@ func TestUserRepository_Save(t *testing.T) {
 
 		got, err := sut.Find(context.Background(), usr.ID())
 		require.NoError(t, err)
-		assert.EqualValues(t, 1, got.Version(), "a first write is not a replacement")
+		assert.Equal(t, common.NewVersion(), got.Version(), "a first write is not a replacement")
 	})
 
 	t.Run("an update advances the version", func(t *testing.T) {
@@ -106,10 +107,10 @@ func TestUserRepository_Save(t *testing.T) {
 		require.NoError(t, usr.Rename("Ada", "Lovelace"))
 		require.NoError(t, sut.Save(context.Background(), usr))
 
-		assert.EqualValues(t, 2, usr.Version(), "the caller's aggregate must track the stored revision")
+		assert.Equal(t, common.NewVersion().Next(), usr.Version(), "the caller's aggregate must track the stored revision")
 		got, err := sut.Find(context.Background(), usr.ID())
 		require.NoError(t, err)
-		assert.EqualValues(t, 2, got.Version())
+		assert.Equal(t, common.NewVersion().Next(), got.Version())
 	})
 
 	t.Run("consecutive updates need no reload", func(t *testing.T) {
@@ -119,11 +120,13 @@ func TestUserRepository_Save(t *testing.T) {
 		usr := test.MustUser(t, "a@example.org", "alice")
 		require.NoError(t, sut.Save(context.Background(), usr))
 
+		want := common.NewVersion()
 		for i := range 3 {
 			require.NoError(t, usr.SetHandle(fmt.Sprintf("alice%d", i)))
 			require.NoError(t, sut.Save(context.Background(), usr))
+			want = want.Next()
 		}
-		assert.EqualValues(t, 4, usr.Version())
+		assert.Equal(t, want, usr.Version())
 	})
 
 	t.Run("rejects a write from a stale version", func(t *testing.T) {
@@ -141,7 +144,7 @@ func TestUserRepository_Save(t *testing.T) {
 		require.NoError(t, sut.Save(context.Background(), &first))
 
 		require.NoError(t, second.Rename("Grace", "Hopper"))
-		require.ErrorIs(t, sut.Save(context.Background(), &second), domain.ErrConflict)
+		require.ErrorIs(t, sut.Save(context.Background(), &second), common.ErrConflict)
 
 		got, err := sut.Find(context.Background(), usr.ID())
 		require.NoError(t, err)
@@ -155,9 +158,9 @@ func TestUserRepository_Save(t *testing.T) {
 		require.NoError(t, sut.Save(context.Background(), usr))
 
 		require.NoError(t, usr.SetHandle("taken"))
-		require.ErrorIs(t, sut.Save(context.Background(), usr), domain.ErrExists)
+		require.ErrorIs(t, sut.Save(context.Background(), usr), common.ErrExists)
 
-		assert.EqualValues(t, 1, usr.Version(), "nothing was persisted, so nothing was revised")
+		assert.Equal(t, common.NewVersion(), usr.Version(), "nothing was persisted, so nothing was revised")
 	})
 
 	t.Run("an update preserves created_at", func(t *testing.T) {
@@ -181,7 +184,7 @@ func TestUserRepository_Save(t *testing.T) {
 		require.NoError(t, sut.Save(context.Background(), test.MustUser(t, "dupe@example.org", "alice")))
 
 		err := sut.Save(context.Background(), test.MustUser(t, "dupe@example.org", "bob"))
-		require.ErrorIs(t, err, domain.ErrExists)
+		require.ErrorIs(t, err, common.ErrExists)
 	})
 
 	t.Run("rejects a duplicate email differing only by case", func(t *testing.T) {
@@ -190,7 +193,7 @@ func TestUserRepository_Save(t *testing.T) {
 		require.NoError(t, sut.Save(context.Background(), test.MustUser(t, "dupe@example.org", "alice")))
 
 		err := sut.Save(context.Background(), test.MustUser(t, "DUPE@Example.ORG", "bob"))
-		require.ErrorIs(t, err, domain.ErrExists)
+		require.ErrorIs(t, err, common.ErrExists)
 	})
 
 	t.Run("rejects a duplicate handle", func(t *testing.T) {
@@ -198,7 +201,7 @@ func TestUserRepository_Save(t *testing.T) {
 		require.NoError(t, sut.Save(context.Background(), test.MustUser(t, "a@example.org", "shared")))
 
 		err := sut.Save(context.Background(), test.MustUser(t, "b@example.org", "shared"))
-		require.ErrorIs(t, err, domain.ErrExists)
+		require.ErrorIs(t, err, common.ErrExists)
 	})
 
 	t.Run("allows several users without a handle", func(t *testing.T) {
@@ -207,7 +210,7 @@ func TestUserRepository_Save(t *testing.T) {
 		require.NoError(t, sut.Save(context.Background(), test.MustUser(t, "a@example.org", "")))
 		require.NoError(t, sut.Save(context.Background(), test.MustUser(t, "b@example.org", "")))
 
-		users, err := sut.FindAll(context.Background(), domain.UserFilter{})
+		users, err := sut.FindAll(context.Background(), user.UserFilter{})
 		require.NoError(t, err)
 		assert.Len(t, users, 2)
 	})
@@ -217,10 +220,10 @@ func TestUserRepository_Save(t *testing.T) {
 		require.NoError(t, sut.Save(context.Background(), test.MustUser(t, "a@example.org", "alice")))
 
 		rejected := test.MustUser(t, "a@example.org", "bob")
-		require.ErrorIs(t, sut.Save(context.Background(), rejected), domain.ErrExists)
+		require.ErrorIs(t, sut.Save(context.Background(), rejected), common.ErrExists)
 
 		_, err := sut.Find(context.Background(), rejected.ID())
-		require.ErrorIs(t, err, domain.ErrNotFound)
+		require.ErrorIs(t, err, common.ErrNotFound)
 	})
 }
 
@@ -230,7 +233,7 @@ func TestUserRepository_ConcurrentAccess(t *testing.T) {
 	const writers = 16
 
 	sut := inmem.NewUserRepository()
-	users := make([]*domain.User, writers)
+	users := make([]*user.User, writers)
 	for i := range users {
 		users[i] = test.MustUser(t, fmt.Sprintf("user%d@example.org", i), fmt.Sprintf("handle%d", i))
 	}
@@ -248,7 +251,7 @@ func TestUserRepository_ConcurrentAccess(t *testing.T) {
 		go func() {
 			defer done.Done()
 			start.Wait()
-			_, _ = sut.FindAll(context.Background(), domain.UserFilter{})
+			_, _ = sut.FindAll(context.Background(), user.UserFilter{})
 		}()
 	}
 	start.Done()
@@ -257,7 +260,7 @@ func TestUserRepository_ConcurrentAccess(t *testing.T) {
 	for i, err := range errs {
 		require.NoError(t, err, "user %d", i)
 	}
-	got, err := sut.FindAll(context.Background(), domain.UserFilter{})
+	got, err := sut.FindAll(context.Background(), user.UserFilter{})
 	require.NoError(t, err)
 	assert.Len(t, got, writers)
 
@@ -285,7 +288,7 @@ func TestUserRepository_ConcurrentAccess(t *testing.T) {
 				saved++
 				continue
 			}
-			require.ErrorIs(t, err, domain.ErrExists)
+			require.ErrorIs(t, err, common.ErrExists)
 		}
 		assert.Equal(t, 1, saved, "the uniqueness check must hold under contention")
 	})
@@ -298,7 +301,7 @@ func TestUserRepository_ConcurrentAccess(t *testing.T) {
 		usr := test.MustUser(t, "contested@example.org", "contested")
 		require.NoError(t, sut.Save(context.Background(), usr))
 
-		loaded := make([]domain.User, writers)
+		loaded := make([]user.User, writers)
 		for i := range loaded {
 			got, err := sut.Find(context.Background(), usr.ID())
 			require.NoError(t, err)
@@ -326,13 +329,13 @@ func TestUserRepository_ConcurrentAccess(t *testing.T) {
 				saved++
 				continue
 			}
-			require.ErrorIs(t, err, domain.ErrConflict)
+			require.ErrorIs(t, err, common.ErrConflict)
 		}
 		assert.Equal(t, 1, saved, "a lost update must be reported, not silently accepted")
 
 		got, err := sut.Find(context.Background(), usr.ID())
 		require.NoError(t, err)
-		assert.EqualValues(t, 2, got.Version(), "exactly one revision was applied")
+		assert.Equal(t, common.NewVersion().Next(), got.Version(), "exactly one revision was applied")
 	})
 }
 
@@ -351,29 +354,29 @@ func TestUserRepository_Find(t *testing.T) {
 	require.NotNil(t, got.Handle())
 	assert.Equal(t, usr.Handle(), got.Handle())
 
-	_, err = sut.Find(context.Background(), domain.NewUserID())
-	require.ErrorIs(t, err, domain.ErrNotFound)
+	_, err = sut.Find(context.Background(), user.NewUserID())
+	require.ErrorIs(t, err, common.ErrNotFound)
 
 	t.Run("empty repository", func(t *testing.T) {
 		empty := inmem.NewUserRepository()
-		_, err := empty.Find(context.Background(), domain.NewUserID())
-		require.ErrorIs(t, err, domain.ErrNotFound)
+		_, err := empty.Find(context.Background(), user.NewUserID())
+		require.ErrorIs(t, err, common.ErrNotFound)
 	})
 }
 
 func TestUserRepository_FindAll(t *testing.T) {
 	t.Run("empty repository", func(t *testing.T) {
 		sut := inmem.NewUserRepository()
-		got, err := sut.FindAll(context.Background(), domain.UserFilter{})
+		got, err := sut.FindAll(context.Background(), user.UserFilter{})
 		require.NoError(t, err)
 		assert.Empty(t, got)
 	})
 
 	t.Run("sorts UUIDv7 ids ascending", func(t *testing.T) {
 		// UUIDv7 is time-ordered, so generating in sequence yields ascending ids.
-		want := make([]domain.UserID, 0, 5)
+		want := make([]user.UserID, 0, 5)
 		for range 5 {
-			want = append(want, domain.NewUserID())
+			want = append(want, user.NewUserID())
 		}
 		require.True(t, slices.IsSorted(want), "UUIDv7 generation should be monotonic")
 
@@ -383,11 +386,11 @@ func TestUserRepository_FindAll(t *testing.T) {
 			require.NoError(t, sut.Save(context.Background(), test.MustRehydrateUser(t, want[i], i)))
 		}
 
-		users, err := sut.FindAll(context.Background(), domain.UserFilter{})
+		users, err := sut.FindAll(context.Background(), user.UserFilter{})
 		require.NoError(t, err)
 		require.Len(t, users, len(want))
 
-		got := make([]domain.UserID, 0, len(users))
+		got := make([]user.UserID, 0, len(users))
 		for _, u := range users {
 			got = append(got, u.ID())
 		}
@@ -398,13 +401,13 @@ func TestUserRepository_FindAll(t *testing.T) {
 		// Map iteration is randomized, so repeated calls must still agree.
 		sut := inmem.NewUserRepository()
 		for i := range 8 {
-			require.NoError(t, sut.Save(context.Background(), test.MustRehydrateUser(t, domain.NewUserID(), i)))
+			require.NoError(t, sut.Save(context.Background(), test.MustRehydrateUser(t, user.NewUserID(), i)))
 		}
 
-		first, err := sut.FindAll(context.Background(), domain.UserFilter{})
+		first, err := sut.FindAll(context.Background(), user.UserFilter{})
 		require.NoError(t, err)
 		for range 5 {
-			again, err := sut.FindAll(context.Background(), domain.UserFilter{})
+			again, err := sut.FindAll(context.Background(), user.UserFilter{})
 			require.NoError(t, err)
 			assert.Equal(t, first, again)
 		}
@@ -415,7 +418,7 @@ func TestUserRepository_FindAll(t *testing.T) {
 		usr := test.MustNewUser(t)
 		require.NoError(t, sut.Save(context.Background(), usr))
 
-		users, err := sut.FindAll(context.Background(), domain.UserFilter{})
+		users, err := sut.FindAll(context.Background(), user.UserFilter{})
 		require.NoError(t, err)
 		require.Len(t, users, 1)
 		assert.Equal(t, usr.Email(), users[0].Email())
@@ -433,7 +436,7 @@ func TestUserRepository_Delete(t *testing.T) {
 		require.NoError(t, sut.Delete(context.Background(), usr.ID()))
 
 		_, err := sut.Find(context.Background(), usr.ID())
-		require.ErrorIs(t, err, domain.ErrNotFound)
+		require.ErrorIs(t, err, common.ErrNotFound)
 	})
 
 	t.Run("is a no-op for an unknown id", func(t *testing.T) {
@@ -441,9 +444,9 @@ func TestUserRepository_Delete(t *testing.T) {
 		usr := test.MustNewUser(t)
 		require.NoError(t, sut.Save(context.Background(), usr))
 
-		require.NoError(t, sut.Delete(context.Background(), domain.NewUserID()))
+		require.NoError(t, sut.Delete(context.Background(), user.NewUserID()))
 
-		users, err := sut.FindAll(context.Background(), domain.UserFilter{})
+		users, err := sut.FindAll(context.Background(), user.UserFilter{})
 		require.NoError(t, err)
 		assert.Len(t, users, 1)
 	})
@@ -466,7 +469,7 @@ func TestUserRepository_Delete(t *testing.T) {
 
 		require.NoError(t, sut.Delete(context.Background(), drop.ID()))
 
-		users, err := sut.FindAll(context.Background(), domain.UserFilter{})
+		users, err := sut.FindAll(context.Background(), user.UserFilter{})
 		require.NoError(t, err)
 		require.Len(t, users, 1)
 		assert.Equal(t, keep.ID(), users[0].ID())

@@ -26,7 +26,7 @@ func (w *writer) ContentType(typ string) *writer {
 // Write implements [io.Writer].
 func (w *writer) Write(p []byte) (n int, err error) {
 	if w.contentType != "" {
-		w.ResponseWriter.Header().Add("Content-Type", w.contentType)
+		w.ResponseWriter.Header().Set("Content-Type", w.contentType)
 	}
 	if w.status != 0 {
 		w.ResponseWriter.WriteHeader(w.status)

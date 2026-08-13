@@ -6,7 +6,8 @@ import (
 
 	"github.com/samwisebuze/dmost/internal/dto/v1alpha"
 	"github.com/samwisebuze/dmost/internal/dto/v1alpha/mapper"
-	"github.com/samwisebuze/dmost/pkg/domain"
+	"github.com/samwisebuze/dmost/pkg/domain/common"
+	domain "github.com/samwisebuze/dmost/pkg/domain/user"
 )
 
 type UserService struct {
@@ -74,8 +75,14 @@ func (u *UserService) Update(ctx context.Context, id domain.UserID, req v1alpha.
 	// above and the Save below. Checking the client's expected version here is
 	// what catches the slower race: two clients that both read version N,
 	// think, and write back.
-	if req.Version != nil && *req.Version != usr.Version() {
-		return domain.User{}, fmt.Errorf("%w: user was modified since version %d", domain.ErrConflict, *req.Version)
+	if req.Version != nil {
+		expected, err := common.ParseVersion(*req.Version)
+		if err != nil {
+			return domain.User{}, err
+		}
+		if !expected.Equal(usr.Version()) {
+			return domain.User{}, fmt.Errorf("%w: user was modified since version %s", common.ErrConflict, expected)
+		}
 	}
 
 	if err := mapper.ApplyUpdateRequest(&usr, req); err != nil {
