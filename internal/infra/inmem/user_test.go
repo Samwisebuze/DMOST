@@ -7,10 +7,10 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/samwisebuze/dmost/internal/infra/inmem"
 	"github.com/samwisebuze/dmost/internal/test"
 	"github.com/samwisebuze/dmost/pkg/domain/common"
 	"github.com/samwisebuze/dmost/pkg/domain/user"
-	"github.com/samwisebuze/dmost/pkg/inmem"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

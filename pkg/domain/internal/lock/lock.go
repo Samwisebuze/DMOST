@@ -11,7 +11,7 @@
 //
 // [Key] restores the boundary at the import graph instead. This package sits
 // under pkg/domain/internal, so only code rooted at pkg/domain can import it —
-// a mutator taking a Key is therefore unreachable from pkg/inmem, pkg/app or
+// a mutator taking a Key is therefore unreachable from internal/infra/inmem, pkg/app or
 // pkg/http, which must go through an aggregate's factory as before.
 package lock
 

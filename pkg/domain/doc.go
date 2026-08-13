@@ -33,7 +33,7 @@
 //
 //   - Repository (port).
 //     An interface representing the management of a collection of aggregates/entities.
-//     The domain only defines the contract it needs, and infrastructure (ex. pkg/inmem) satisfy  it.
+//     The domain only defines the contract it needs, and infrastructure (ex. internal/infra/inmem) satisfy  it.
 //
 //   - Optimistic concurrency.
 //     Not a domain rule but a persistence concern threaded through the

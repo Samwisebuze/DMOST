@@ -9,10 +9,10 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/samwisebuze/dmost/internal/infra/inmem"
 	"github.com/samwisebuze/dmost/pkg/app"
 	"github.com/samwisebuze/dmost/pkg/app/services"
 	"github.com/samwisebuze/dmost/pkg/http"
-	"github.com/samwisebuze/dmost/pkg/inmem"
 )
 
 func main() {
