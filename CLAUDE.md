@@ -104,7 +104,7 @@ Layered / ports-and-adapters, with dependencies pointing inward toward `pkg/doma
 
 ```
 cmd/dmostd  →  pkg/http  →  pkg/app  →  pkg/domain  ←  pkg/inmem
-                    ↘         ↙
+                    ↘         ↙                     ←  internal/infra/sqlite
               internal/dto (v1alpha wire types + mappers)
 ```
 
@@ -123,7 +123,12 @@ cmd/dmostd  →  pkg/http  →  pkg/app  →  pkg/domain  ←  pkg/inmem
   These types are JSON-specific despite the format-neutral path: they carry `json:` tags, and their shapes encode JSON-contract decisions (`name` as one `"First Last"` string, `created_at` as an RFC3339 string). A second format does **not** reuse them — gRPC would use generated `.pb.go` types, and XML would want its own shapes on an independent version line. If a second format ever lands, add a format axis then (`internal/dto/json/v1alpha`, `internal/dto/xml/v1alpha`); don't add `xml:` tags to these structs.
 - **`pkg/http`** — gorilla/mux server *and* a matching `Client` in the same file as each resource's handlers: `user.go` holds the route registration, every handler, and the client methods that call them; `health.go` does the same for `/healthz`. Keep that pairing — end-to-end tests in `cmd/dmostd` drive the real server through this client, so a new handler without a client method leaves them unable to reach it.
 - **`pkg/http/problem`** — RFC 7807 `application/problem+json` builder. All error responses go through it (`problem.New().Of(code).WriteTo(w)`); use `Wrap` to expose the cause as `reason` in the body and `WrapSilent` to keep it server-side only.
-- **`pkg/inmem`** — in-memory `UserRepository` adapter; the only storage backend today.
+- **`pkg/inmem`** — in-memory `UserRepository` adapter; the only storage backend wired into `cmd/dmostd` today.
+- **`internal/infra`** — outbound technical adapters: the code owning a connection to something outside the process. One subdirectory per technology, each holding the connection *and* the port implementations that need it (a SQL-backed `UserRepository` lives beside the `*DB` it queries). Repo-private for the same reason `internal/dto` is — a storage backend is an implementation detail, not a published contract.
+
+  **Connections are modeled as processes**, in the shape `pkg/http.Server` set: exported plain fields for configuration, a no-argument constructor returning something already runnable on defaults, and `Open() error` / `Close() error`. The constructor allocates and defaults but **does not connect**, so it cannot fail and returns no error; `cmd/dmostd`'s `Main` owns the lifecycle. `internal/infra/doc.go` carries the rationale — keep it and this bullet in agreement.
+
+  `internal/infra/sqlite` is the first of these. Two things about it generalize: the driver is **`modernc.org/sqlite`** because `docker/Dockerfile` builds with `CGO_ENABLED=0` for the `scratch` image and a cgo binding would break that, and per-connection settings (`foreign_keys`, `busy_timeout`) are folded into the **DSN**, never issued as an `Exec` — an `Exec` after `sql.Open` configures one pooled connection and silently misses the rest. Its default DSN is a *shared-cache* in-memory database with a reserved keepalive connection; bare `":memory:"` gives every pooled connection its own empty database. `go doc -all ./internal/infra/sqlite` has the full account.
 
 `Server.serveHTTP` wraps the router to do two things mux cannot: honor a `_method` form override on POSTs, and strip a `.json` URL suffix while setting the JSON `Accept`/`Content-Type` headers (so `curl /users.json` works).
 
