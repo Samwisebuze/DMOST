@@ -281,10 +281,10 @@ func FindUserHandler(app *app.App) http.HandlerFunc {
 		user, err := app.UserService.Find(r.Context(), id)
 		if errors.Is(err, common.ErrNotFound) {
 			problem.New().
-				Title("not found").
 				Wrap(err).
 				Of(http.StatusNotFound).
 				WriteTo(w)
+			return
 		}
 		if err != nil {
 			problem.New().
