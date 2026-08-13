@@ -1,14 +1,26 @@
 package test
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/samwisebuze/dmost/pkg/domain/character"
 	"github.com/samwisebuze/dmost/pkg/domain/common"
 	"github.com/samwisebuze/dmost/pkg/domain/user"
 	"github.com/stretchr/testify/require"
 )
+
+// MustRehydrateCharacter builds a character with a caller-chosen ID and sheet.
+// The character package has no validating constructor yet, so this goes through
+// the factory the same way a repository would.
+func MustRehydrateCharacter(t testing.TB, id character.CharacterID, data string) *character.Character {
+	t.Helper()
+	require.True(t, json.Valid([]byte(data)), "character sheet must be valid JSON")
+	c := character.CharacterFactory{}.Rehydrate(id, json.RawMessage(data), time.Now(), common.NewVersion())
+	return &c
+}
 
 func MustUserHandle(t testing.TB, handle string) user.UserHandle {
 	t.Helper()
