@@ -90,6 +90,9 @@ func (m *Main) Run(ctx context.Context) (err error) {
 		UserService: &services.UserService{
 			Users: inmem.NewUserRepository(),
 		},
+		CharacterService: &services.CharacterService{
+			Characters: inmem.NewCharacterRepository(),
+		},
 	}
 
 	m.HTTPServer.SetApp(m.App)

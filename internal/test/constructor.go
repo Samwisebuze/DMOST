@@ -12,9 +12,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// MustRehydrateCharacter builds a character with a caller-chosen ID and sheet.
-// The character package has no validating constructor yet, so this goes through
-// the factory the same way a repository would.
+// MustRehydrateCharacter builds a character with a caller-chosen ID and sheet,
+// going through the factory the same way a repository would. Prefer
+// [MustCharacter] unless the test needs to pin the ID or to hold a sheet the
+// v1alpha schema would reject.
 func MustRehydrateCharacter(t testing.TB, id character.CharacterID, data string) *character.Character {
 	t.Helper()
 	require.True(t, json.Valid([]byte(data)), "character sheet must be valid JSON")

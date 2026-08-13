@@ -1,0 +1,29 @@
+{
+  "_id": "01920000-0000-7000-8000-000000000001",
+  "doc_type": "character",
+  "schema_version": "1.0.0",
+  "ruleset": { "system": "dnd5e", "revision": "srd@5.2.1" },
+  "identity": { "character_name": "Bruenor" },
+  "progression": { "total_character_level": 1, "proficiency_bonus": 2 },
+  "abilities": {
+    "strength": { "base_score": 16, "total_score": 16, "modifier": 3, "maximum_allowed": 20 },
+    "dexterity": { "base_score": 12, "total_score": 12, "modifier": 1, "maximum_allowed": 20 },
+    "constitution": { "base_score": 15, "total_score": 15, "modifier": 2, "maximum_allowed": 20 },
+    "intelligence": { "base_score": 10, "total_score": 10, "modifier": 0, "maximum_allowed": 20 },
+    "wisdom": { "base_score": 13, "total_score": 13, "modifier": 1, "maximum_allowed": 20 },
+    "charisma": { "base_score": 8, "total_score": 8, "modifier": -1, "maximum_allowed": 20 }
+  },
+  "species": {
+    "instance_id": "species-1",
+    "name": "Dwarf",
+    "creature_type": "Humanoid",
+    "size": "Medium",
+    "base_walking_speed": 30
+  },
+  "background": { "instance_id": "background-1", "name": "Soldier" },
+  "classes": [
+    { "instance_id": "class-1", "class_name": "Fighter", "class_level": 1, "hit_die": "d10" }
+  ],
+  "vitals": { "hit_points": { "maximum": 12, "current": 12 } },
+  "combat": {}
+}
