@@ -16,4 +16,11 @@
 // real behavior a repository is expected to have, which is what makes
 // [UserRepository.Save] the reference implementation of the versioning rule
 // described in [github.com/samwisebuze/dmost/pkg/domain].
+//
+// The scenarios that pin that rule down for characters no longer live in this
+// package's tests. They moved to
+// [github.com/samwisebuze/dmost/internal/test/repotest] when
+// [github.com/samwisebuze/dmost/internal/infra/sqlite] grew a second
+// implementation of the same port, so that both answer to one definition
+// instead of two that drift; this package's test file runs them from there.
 package inmem

@@ -16,10 +16,15 @@ import (
 // going through the factory the same way a repository would. Prefer
 // [MustCharacter] unless the test needs to pin the ID or to hold a sheet the
 // v1alpha schema would reject.
+//
+// The timestamp is stamped in UTC, matching what the domain's own constructor
+// records. A local time carries a monotonic reading and a location that no
+// repository storing an instant can give back, which would make the fixture
+// disagree with a round trip for reasons the test is not about.
 func MustRehydrateCharacter(t testing.TB, id character.CharacterID, data string) *character.Character {
 	t.Helper()
 	require.True(t, json.Valid([]byte(data)), "character sheet must be valid JSON")
-	c := character.CharacterFactory{}.Rehydrate(id, json.RawMessage(data), time.Now(), common.NewVersion())
+	c := character.CharacterFactory{}.Rehydrate(id, json.RawMessage(data), time.Now().UTC(), common.NewVersion())
 	return &c
 }
 

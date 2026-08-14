@@ -316,10 +316,39 @@ func TestDB_Pool(t *testing.T) {
 		// Forwarding the zero would mean "unlimited" here but "keep no idle
 		// connections" for MaxIdleConns — the field means unconfigured, not a
 		// value.
+		//
+		// File-backed, because an unconfigured in-memory database does get a cap
+		// — see the next case.
+		t.Parallel()
+		db := NewDB()
+		db.DSN = filepath.Join(t.TempDir(), "pool.db")
+		require.NoError(t, db.Open())
+		t.Cleanup(func() { assert.NoError(t, db.Close()) })
+
+		assert.Equal(t, 0, db.db.Stats().MaxOpenConnections)
+	})
+
+	t.Run("an unconfigured in-memory database is capped at two connections", func(t *testing.T) {
+		// One for the keepalive, one to work with. Two connections into a
+		// shared-cache database can stall on each other's table locks inside the
+		// driver rather than failing, so this one never lets them.
 		t.Parallel()
 		db := newTestDB(t)
 
-		assert.Equal(t, 0, db.db.Stats().MaxOpenConnections)
+		assert.Equal(t, 2, db.db.Stats().MaxOpenConnections)
+	})
+
+	t.Run("a configured limit wins over the in-memory cap", func(t *testing.T) {
+		// The cap is a default for an unset field, not a rule imposed on a
+		// caller who asked for something.
+		t.Parallel()
+		db := NewDB()
+		db.DSN = memoryDSN(t.Name())
+		db.MaxOpenConns = 5
+		require.NoError(t, db.Open())
+		t.Cleanup(func() { assert.NoError(t, db.Close()) })
+
+		assert.Equal(t, 5, db.db.Stats().MaxOpenConnections)
 	})
 }
 

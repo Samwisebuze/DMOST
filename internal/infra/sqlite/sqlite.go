@@ -28,6 +28,33 @@
 // the data with it. Open therefore reserves one connection for the lifetime of
 // an in-memory DB and holds it until Close.
 //
+// The shared cache also brings SQLite's table-level locking with it, which the
+// bare form does not have, and the driver's answer to a conflict there is not
+// an error: it calls sqlite3_unlock_notify and parks the calling goroutine
+// until the connection holding the table lets go. busy_timeout is not consulted
+// and nothing is returned, so contention between two connections on one
+// in-memory database shows up as a stall rather than a failure — and two that
+// end up waiting on each other are a deadlock the driver detects only in the
+// cases sqlite3_unlock_notify can see. [DB.Open] therefore holds an in-memory
+// pool to a single working connection; see the cap there.
+//
+// # Schema and migrations
+//
+// The schema is managed with golang-migrate, from .sql files under migrations/
+// that [DB.Migrate] embeds into the binary — the release image is FROM scratch
+// and carries no files to read at runtime. The database driver is
+// golang-migrate's CGo-free one, for the same reason the SQL driver above is.
+//
+// [DB.Open] runs migrations itself unless [DB.AutoMigrate] is cleared, because
+// the default database is created empty on every Open: a DB that came back from
+// Open without a schema would pass every check this package makes and then fail
+// at the first query.
+//
+// One hazard worth knowing before editing [DB.Migrate]: golang-migrate's
+// database driver implements Close by closing the *sql.DB it was given, so
+// closing a migrate.Migrate built on this pool would close the pool. Migrate
+// does not call it, and says so at the point where a reader would expect it.
+//
 // # PRAGMAs belong in the DSN
 //
 // foreign_keys and busy_timeout are per-connection settings in SQLite. Issuing
@@ -50,12 +77,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	// The driver registers itself as [DriverName] from an init function.
-	_ "modernc.org/sqlite"
 )
 
 // DriverName is the name modernc.org/sqlite registers with database/sql.
+//
+// The registration happens in that package's init function, reached through
+// retry.go's import of it — which is why no file here imports it blank.
 const DriverName = "sqlite"
 
 // Defaults applied by [NewDB]. They describe a database that needs nothing from
@@ -133,6 +160,19 @@ type DB struct {
 	// leaving SQLite's default in place.
 	ForeignKeys bool
 
+	// AutoMigrate has [DB.Open] bring the schema up to date before it returns.
+	//
+	// It defaults to true because the default database is in-memory and is
+	// created empty on every Open. A DB that returned from Open without a schema
+	// would satisfy every check this package makes — it opens, it pings, it
+	// answers — and then fail at the first query with "no such table". This
+	// package's promise is that a DB is usable the moment Open returns, and on
+	// an ephemeral database that promise has to include the schema.
+	//
+	// Clear it for a read-only DSN, or where something other than this program
+	// owns the schema. [DB.Migrate] is then the caller's to run.
+	AutoMigrate bool
+
 	// BusyTimeout is how long to wait for a lock before returning
 	// SQLITE_BUSY. Zero leaves SQLite's default (no wait) in place.
 	BusyTimeout time.Duration
@@ -150,6 +190,10 @@ type DB struct {
 	// zero leaves database/sql's own default in place rather than being
 	// forwarded, so the zero value of this struct means "unconfigured", not
 	// "no connections allowed".
+	//
+	// An unconfigured MaxOpenConns is capped at two for an in-memory database;
+	// see [DB.Open]. Setting it to one for such a database deadlocks: the
+	// keepalive connection holds the only slot and no query can ever get one.
 	MaxOpenConns    int
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
@@ -165,6 +209,7 @@ func NewDB() *DB {
 	return &DB{
 		DSN:         DefaultDSN,
 		ForeignKeys: true,
+		AutoMigrate: true,
 		BusyTimeout: DefaultBusyTimeout,
 		JournalMode: DefaultJournalMode,
 	}
@@ -213,6 +258,28 @@ func (db *DB) Open() error {
 	// SetMaxIdleConns(0) is "keep none"), where the field means "not set".
 	if db.MaxOpenConns > 0 {
 		pool.SetMaxOpenConns(db.MaxOpenConns)
+	} else if res.memory {
+		// A shared-cache in-memory database takes table-level locks, and the
+		// driver does not report a conflict over one — it parks the goroutine on
+		// sqlite3_unlock_notify until the holder releases, no matter what
+		// busy_timeout says. Two connections contending therefore stall rather
+		// than fail, and two waiting on each other deadlock. Serializing this
+		// database's work onto one connection means they never contend, and an
+		// ephemeral database that lives and dies with one process is not where
+		// read throughput is won. A file-backed database keeps the full pool: it
+		// is not in a shared cache, and WAL already lets readers and one writer
+		// proceed together.
+		//
+		// Two, not one. The keepalive reserved below counts against this limit
+		// and holds its connection for the lifetime of the DB, so a cap of one
+		// would leave nothing for queries and block every call forever.
+		//
+		// This holds only because nothing here occupies one connection while
+		// asking for another — not this package's repositories, and not
+		// golang-migrate, whose version read, migration runs, and version
+		// writes are strictly sequential. A future method that opened a
+		// [database/sql.Tx] and then queried outside it would deadlock.
+		pool.SetMaxOpenConns(2)
 	}
 	if db.MaxIdleConns > 0 {
 		pool.SetMaxIdleConns(db.MaxIdleConns)
@@ -245,6 +312,16 @@ func (db *DB) Open() error {
 			return fmt.Errorf("sqlite: reserve keepalive connection: %w", err)
 		}
 		db.keepalive = conn
+	}
+
+	// After the keepalive, so an in-memory database cannot be collected out from
+	// under the migration, and unwinding through Close like every step above so
+	// that a failure here still leaves the DB closed and reusable.
+	if db.AutoMigrate {
+		if err := db.Migrate(db.ctx); err != nil {
+			_ = db.Close()
+			return err
+		}
 	}
 
 	return nil
@@ -289,10 +366,25 @@ func (db *DB) Close() error {
 // panicking on a DB that is not open, so that a health check can call it
 // without first having to know the program's startup state.
 func (db *DB) Ping(ctx context.Context) error {
-	if db.db == nil {
-		return ErrClosed
+	pool, err := db.handle()
+	if err != nil {
+		return err
 	}
-	return db.db.PingContext(ctx)
+	return pool.PingContext(ctx)
+}
+
+// handle returns the pool, or [ErrClosed] if this DB is not running.
+//
+// It is the one place that decides what an unopened DB means, so that the
+// repositories in this package do not each reach into the field and answer that
+// question for themselves. Nothing outside the package gets the handle: a
+// caller that could take the pool could also close it, and the lifecycle here
+// belongs to Open and Close.
+func (db *DB) handle() (*sql.DB, error) {
+	if db.db == nil {
+		return nil, ErrClosed
+	}
+	return db.db, nil
 }
 
 // resolvedDSN is the outcome of normalizing [DB.DSN]: the string handed to the
