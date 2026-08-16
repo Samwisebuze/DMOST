@@ -40,6 +40,21 @@ func TestCharacterService_Create(t *testing.T) {
 		assert.JSONEq(t, string(sheet), string(found.Data()))
 	})
 
+	t.Run("accepts a sheet with no _id", func(t *testing.T) {
+		// A create request has no identity to state yet — the aggregate's own
+		// CharacterID is assigned here, so the schema must not demand one.
+		var doc map[string]any
+		require.NoError(t, json.Unmarshal(test.MustCharacterSheet(t), &doc))
+		delete(doc, "_id")
+		sheet, err := json.Marshal(doc)
+		require.NoError(t, err)
+
+		sut := services.NewCharacterService(inmem.NewCharacterRepository())
+		got, err := sut.Create(context.Background(), v1alpha.CreateCharacterRequest{Sheet: sheet})
+		require.NoError(t, err)
+		assert.NotEmpty(t, got.ID())
+	})
+
 	t.Run("keeps fields the generated schema has no home for", func(t *testing.T) {
 		// The sheet is stored as the client's bytes, not as a re-encoding of
 		// the generated struct — so an unknown field survives the round trip.

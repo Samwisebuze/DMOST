@@ -4,11 +4,14 @@
   "title": "5.5e Character Document",
   "description": "Document aggregate root for a single player character under the 5.5e ruleset. Deliberately denormalized: raw inputs and computed totals are both stored, and embedded objects snapshot their rules text alongside a source_ref. Every section lives in a sibling schema file; this document is only the assembly.",
   "type": "object",
-  "required": ["_id", "doc_type", "schema_version", "ruleset", "identity", "progression", "abilities", "species", "background", "classes", "vitals", "combat"],
+  "required": ["doc_type", "schema_version", "ruleset", "identity", "progression", "abilities", "species", "background", "classes", "vitals", "combat"],
   "additionalProperties": false,
 
   "properties": {
-    "_id": { "type": "string" },
+    "_id": {
+      "type": "string",
+      "description": "Server-assigned document identity. Deliberately optional: a create request has no identity to state yet, and the aggregate's own CharacterID — not this field — is authoritative once the document is stored."
+    },
     "doc_type": { "const": "character" },
     "schema_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
     "ruleset": { "$ref": "common.schema.json#/$defs/ruleset" },

@@ -2,13 +2,11 @@
 
 package character
 
-import (
-	"encoding/json"
-	"fmt"
-	"reflect"
-	"regexp"
-	"time"
-)
+import "encoding/json"
+import "fmt"
+import "reflect"
+import "regexp"
+import "time"
 
 type Abilities struct {
 	// Charisma corresponds to the JSON schema field "charisma".
@@ -647,8 +645,10 @@ func (j *BuildLogEntry) UnmarshalJSON(value []byte) error {
 // embedded objects snapshot their rules text alongside a source_ref. Every section
 // lives in a sibling schema file; this document is only the assembly.
 type CharacterSchema struct {
-	// Id corresponds to the JSON schema field "_id".
-	Id string `json:"_id" yaml:"_id" mapstructure:"_id"`
+	// Server-assigned document identity. Deliberately optional: a create request has
+	// no identity to state yet, and the aggregate's own CharacterID — not this field
+	// — is authoritative once the document is stored.
+	Id *string `json:"_id,omitempty,omitzero" yaml:"_id,omitempty" mapstructure:"_id,omitempty"`
 
 	// Abilities corresponds to the JSON schema field "abilities".
 	Abilities Abilities `json:"abilities" yaml:"abilities" mapstructure:"abilities"`
@@ -739,9 +739,6 @@ func (j *CharacterSchema) UnmarshalJSON(value []byte) error {
 	var raw map[string]interface{}
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
-	}
-	if _, ok := raw["_id"]; raw != nil && !ok {
-		return fmt.Errorf("field _id in CharacterSchema: required")
 	}
 	if _, ok := raw["abilities"]; raw != nil && !ok {
 		return fmt.Errorf("field abilities in CharacterSchema: required")
