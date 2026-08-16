@@ -60,18 +60,8 @@ func (c *CharacterService) Update(ctx context.Context, id domain.CharacterID, re
 		return domain.Character{}, err
 	}
 
-	// The repository's compare-and-set only sees the window between the Find
-	// above and the Save below. Checking the client's expected version here is
-	// what catches the slower race: two clients that both read version N,
-	// think, and write back.
-	if req.Version != nil {
-		expected, err := common.ParseVersion(*req.Version)
-		if err != nil {
-			return domain.Character{}, err
-		}
-		if !expected.Equal(chr.Version()) {
-			return domain.Character{}, fmt.Errorf("%w: character was modified since version %s", common.ErrConflict, expected)
-		}
+	if err := checkVersion(req.Version, chr.Version()); err != nil {
+		return domain.Character{}, err
 	}
 
 	if err := mapper.ApplyCharacterUpdateRequest(&chr, req); err != nil {
@@ -85,4 +75,58 @@ func (c *CharacterService) Update(ctx context.Context, id domain.CharacterID, re
 	}
 
 	return chr, nil
+}
+
+// Patch implements [app.CharacterService].
+//
+// Update's twin, differing only in what the mapper does to the sheet: this one
+// merges rather than replaces. Everything around it — the load, the version
+// guard, the upsert — is the same, because a partial write is still one
+// load-modify-save cycle against one aggregate.
+func (c *CharacterService) Patch(ctx context.Context, id domain.CharacterID, req v1alpha.PatchCharacterRequest) (domain.Character, error) {
+	chr, err := c.Characters.Find(ctx, id)
+	if err != nil {
+		return domain.Character{}, err
+	}
+
+	if err := checkVersion(req.Version, chr.Version()); err != nil {
+		return domain.Character{}, err
+	}
+
+	if err := mapper.ApplyCharacterPatchRequest(&chr, req); err != nil {
+		return domain.Character{}, err
+	}
+
+	if err := c.Characters.Save(ctx, &chr); err != nil {
+		return domain.Character{}, err
+	}
+
+	return chr, nil
+}
+
+// checkVersion refuses a write whose client read a revision the stored
+// Character has moved past. A nil expected means the client did not say, which
+// v1alpha reads as last-writer-wins.
+//
+// The repository's compare-and-set only sees the window between a Find and the
+// Save that follows it. Checking the client's expected version here is what
+// catches the slower race: two clients that both read version N, think, and
+// write back.
+//
+// Returns [common.ErrInvalid] for a version no client could have read (zero),
+// and [common.ErrConflict] for one that has been overtaken.
+func checkVersion(expected *uint64, actual common.Version) error {
+	if expected == nil {
+		return nil
+	}
+
+	want, err := common.ParseVersion(*expected)
+	if err != nil {
+		return err
+	}
+	if !want.Equal(actual) {
+		return fmt.Errorf("%w: character was modified since version %s", common.ErrConflict, want)
+	}
+
+	return nil
 }
