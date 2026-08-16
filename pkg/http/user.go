@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/url"
 
@@ -14,7 +13,6 @@ import (
 	"github.com/samwisebuze/dmost/internal/dto/v1alpha"
 	"github.com/samwisebuze/dmost/internal/dto/v1alpha/mapper"
 	"github.com/samwisebuze/dmost/pkg/app"
-	"github.com/samwisebuze/dmost/pkg/domain/common"
 	"github.com/samwisebuze/dmost/pkg/domain/user"
 	"github.com/samwisebuze/dmost/pkg/http/problem"
 )
@@ -89,19 +87,8 @@ func CreateUserHandler(app *app.App) http.HandlerFunc {
 		}
 
 		usr, err := app.UserService.Create(r.Context(), req)
-		if errors.Is(err, common.ErrInvalid) {
-			problem.New().
-				Wrap(err).
-				Of(http.StatusUnprocessableEntity).
-				WriteTo(w)
-			return
-		}
 		if err != nil {
-			slog.Error(err.Error())
-			problem.New().
-				Wrap(err).
-				Of(http.StatusInternalServerError).
-				WriteTo(w)
+			WriteError(w, r, err)
 			return
 		}
 
@@ -155,34 +142,8 @@ func UpdateUserHandler(app *app.App) http.HandlerFunc {
 		}
 
 		usr, err := app.UserService.Update(r.Context(), id, req)
-		switch {
-		case errors.Is(err, common.ErrNotFound):
-			problem.New().
-				Wrap(err).
-				Of(http.StatusNotFound).
-				WriteTo(w)
-			return
-		// Checked before ErrInvalid because a conflict is not a bad request:
-		// the edit was well formed, it just lost a race. Retrying it verbatim
-		// is wrong, so it must not look like a 422 the client can fix.
-		case errors.Is(err, common.ErrConflict):
-			problem.New().
-				Wrap(err).
-				Of(http.StatusConflict).
-				WriteTo(w)
-			return
-		case errors.Is(err, common.ErrInvalid):
-			problem.New().
-				Wrap(err).
-				Of(http.StatusUnprocessableEntity).
-				WriteTo(w)
-			return
-		case err != nil:
-			slog.Error(err.Error())
-			problem.New().
-				WrapSilent(err).
-				Of(http.StatusInternalServerError).
-				WriteTo(w)
+		if err != nil {
+			WriteError(w, r, err)
 			return
 		}
 
@@ -230,10 +191,7 @@ func ListUsersHandler(app *app.App) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		users, err := app.UserService.FindAll(r.Context())
 		if err != nil {
-			problem.New().
-				WrapSilent(err).
-				Of(http.StatusInternalServerError).
-				WriteTo(w)
+			WriteError(w, r, err)
 			return
 		}
 
@@ -279,18 +237,8 @@ func FindUserHandler(app *app.App) http.HandlerFunc {
 			return
 		}
 		user, err := app.UserService.Find(r.Context(), id)
-		if errors.Is(err, common.ErrNotFound) {
-			problem.New().
-				Wrap(err).
-				Of(http.StatusNotFound).
-				WriteTo(w)
-			return
-		}
 		if err != nil {
-			problem.New().
-				WrapSilent(err).
-				Of(http.StatusInternalServerError).
-				WriteTo(w)
+			WriteError(w, r, err)
 			return
 		}
 

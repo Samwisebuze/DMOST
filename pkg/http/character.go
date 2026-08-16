@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/url"
 
@@ -64,24 +62,14 @@ func CreateCharacterHandler(app *app.App) http.HandlerFunc {
 		}
 
 		chr, err := app.CharacterService.Create(r.Context(), req)
-		switch {
-		// 400 where /users answers 422. The difference is what the body *is*:
-		// a create request here carries nothing but the sheet, so a sheet the
-		// v1alpha schema refuses is a malformed body — the same failure as the
-		// undecodable JSON handled above — rather than a well-formed document
-		// that ran into a domain rule the way a duplicate email does.
-		case errors.Is(err, common.ErrInvalid):
-			problem.New().
-				Wrap(err).
-				Of(http.StatusBadRequest).
-				WriteTo(w)
-			return
-		case err != nil:
-			slog.Error(err.Error())
-			problem.New().
-				WrapSilent(err).
-				Of(http.StatusInternalServerError).
-				WriteTo(w)
+		if err != nil {
+			// 400 where /users answers 422. The difference is what the body
+			// *is*: a create request here carries nothing but the sheet, so a
+			// sheet the v1alpha schema refuses is a malformed body — the same
+			// failure as the undecodable JSON handled above — rather than a
+			// well-formed document that ran into a domain rule the way a
+			// duplicate email does.
+			WriteError(w, r, err, Status(common.ErrInvalid, http.StatusBadRequest))
 			return
 		}
 
@@ -142,37 +130,12 @@ func UpdateCharacterHandler(app *app.App) http.HandlerFunc {
 		}
 
 		chr, err := app.CharacterService.Update(r.Context(), id, req)
-		switch {
-		case errors.Is(err, common.ErrNotFound):
-			problem.New().
-				Wrap(err).
-				Of(http.StatusNotFound).
-				WriteTo(w)
-			return
-		// Checked before ErrInvalid because a conflict is not a bad request:
-		// the edit was well formed, it just lost a race. Retrying it verbatim
-		// is wrong, so it must not look like something the client can fix by
-		// correcting the body. ErrExists wraps ErrInvalid and ErrConflict
-		// deliberately does not, which is what makes this ordering load-bearing
-		// rather than cosmetic.
-		case errors.Is(err, common.ErrConflict):
-			problem.New().
-				Wrap(err).
-				Of(http.StatusConflict).
-				WriteTo(w)
-			return
-		case errors.Is(err, common.ErrInvalid):
-			problem.New().
-				Wrap(err).
-				Of(http.StatusBadRequest).
-				WriteTo(w)
-			return
-		case err != nil:
-			slog.Error(err.Error())
-			problem.New().
-				WrapSilent(err).
-				Of(http.StatusInternalServerError).
-				WriteTo(w)
+		if err != nil {
+			// A sheet is a malformed body here for the same reason it is on
+			// create; not-found and conflict take the defaults. The override
+			// only reaches ErrInvalid, so a lost race still answers 409 rather
+			// than a 400 the client would think it could fix.
+			WriteError(w, r, err, Status(common.ErrInvalid, http.StatusBadRequest))
 			return
 		}
 
@@ -231,25 +194,10 @@ func FindCharacterHandler(app *app.App) http.HandlerFunc {
 		// so a malformed one is one ErrInvalid from the layer that owns the
 		// rule rather than a second check drifting out of step here.
 		chr, err := app.CharacterService.Find(r.Context(), id)
-		switch {
-		case errors.Is(err, common.ErrNotFound):
-			problem.New().
-				Wrap(err).
-				Of(http.StatusNotFound).
-				WriteTo(w)
-			return
-		case errors.Is(err, common.ErrInvalid):
-			problem.New().
-				Wrap(err).
-				Of(http.StatusBadRequest).
-				WriteTo(w)
-			return
-		case err != nil:
-			slog.Error(err.Error())
-			problem.New().
-				WrapSilent(err).
-				Of(http.StatusInternalServerError).
-				WriteTo(w)
+		if err != nil {
+			// An ID that will not parse is a malformed request line, not a
+			// document that broke a rule, so ErrInvalid is a 400 here too.
+			WriteError(w, r, err, Status(common.ErrInvalid, http.StatusBadRequest))
 			return
 		}
 
