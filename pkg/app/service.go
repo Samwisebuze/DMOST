@@ -69,8 +69,13 @@ type CharacterService interface {
 	// does, so a patch that deletes a required section is refused.
 	//
 	// Unlike Create and Update, this does not store the client's bytes: the
-	// merge decodes and re-encodes, so object keys come back sorted. Fields
-	// the v1alpha type does not know about survive; their position does not.
+	// merge decodes and re-encodes, so a patched sheet comes back with object
+	// keys sorted and insignificant whitespace gone. Fields the v1alpha type
+	// does not know about survive, and numbers keep their own literal text;
+	// their position and the sheet's original formatting do not. Byte-for-byte
+	// fidelity to what was stored is lost the first time anything is patched,
+	// so a client that needs its exact bytes preserved uses Create or Update's
+	// replace path instead — those store them.
 	// See [v1alpha.PatchCharacterRequest].
 	//
 	// Errors come from pkg/domain/common: ErrNotFound if no such Character
