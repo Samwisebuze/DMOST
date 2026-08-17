@@ -26,12 +26,13 @@ import (
 func (s *Server) registerCharacterRoutes(router *mux.Router) {
 	r := router.PathPrefix("/characters").Subrouter()
 	r.Handle("", CreateCharacterHandler(s.app)).Methods(http.MethodPost)
-	// PATCH for the same reason /users uses it: a request that omits the sheet
-	// leaves the stored one alone rather than clearing it, and PATCH is one of
-	// the methods serveHTTP's "_method" form override accepts. That a supplied
-	// sheet replaces the stored one *whole* is a fact about the document, not
-	// about the method — the domain has no view inside a sheet to merge along.
-	r.Handle("/{id}", UpdateCharacterHandler(s.app)).Methods(http.MethodPatch)
+	// PUT and PATCH both write the sheet and differ in how much of it the
+	// client has to send. PUT replaces the document whole, and is the only one
+	// that stores the client's own bytes. PATCH merges an RFC 7396 document
+	// into the stored sheet, which means decoding and re-encoding it — see
+	// [v1alpha.PatchCharacterRequest] for what that costs.
+	r.Handle("/{id}", ReplaceCharacterHandler(s.app)).Methods(http.MethodPut)
+	r.Handle("/{id}", PatchCharacterHandler(s.app)).Methods(http.MethodPatch)
 	r.Handle("/{id}", FindCharacterHandler(s.app)).Methods(http.MethodGet)
 }
 
@@ -39,7 +40,8 @@ func (u urlBuilder) CreateCharacter() string {
 	return fmt.Sprintf("%s/characters", u.Server)
 }
 
-// Character is the URL of one character: the same path answers GET and PATCH.
+// Character is the URL of one character: the same path answers GET, PUT and
+// PATCH.
 //
 // A CharacterID is a UUID today, so it holds no dot for serveHTTP's ".json"
 // suffix stripping to trip over and nothing PathEscape would alter; the escape
@@ -114,7 +116,7 @@ func (c *Client) CreateCharacter(ctx context.Context, req v1alpha.CreateCharacte
 	return mapper.CharacterResponseToCharacter(data), nil
 }
 
-func UpdateCharacterHandler(app *app.App) http.HandlerFunc {
+func ReplaceCharacterHandler(app *app.App) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := character.CharacterID(mux.Vars(r)["id"])
 
@@ -145,7 +147,82 @@ func UpdateCharacterHandler(app *app.App) http.HandlerFunc {
 	}
 }
 
+// UpdateCharacter replaces the stored sheet whole, through PUT. The partial
+// counterpart is [Client.PatchCharacter].
 func (c *Client) UpdateCharacter(ctx context.Context, id character.CharacterID, req v1alpha.UpdateCharacterRequest) (character.Character, error) {
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return character.Character{}, fmt.Errorf("PUT %q: %w", c.urls.Character(id), err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, c.urls.Character(id), bytes.NewBuffer(raw))
+	if err != nil {
+		return character.Character{}, fmt.Errorf("PUT %q: %w", c.urls.Character(id), err)
+	}
+	httpReq.Header.Set("Content-Type", v1alpha.ContentTypeJSON)
+
+	resp, err := c.client.Do(httpReq)
+	if err != nil {
+		return character.Character{}, fmt.Errorf("PUT %q failed: %w", c.urls.Character(id), err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var prob problem.Problem
+		if err := json.NewDecoder(resp.Body).Decode(&prob); err != nil {
+			return character.Character{}, fmt.Errorf("PUT %q: unprocessable response [code=%q]: %w", c.urls.Character(id), resp.Status, err)
+		}
+		return character.Character{}, fmt.Errorf("PUT %q: %w", c.urls.Character(id), &prob)
+	}
+
+	data, err := decode[v1alpha.CharacterResponse](resp)
+	if err != nil {
+		return character.Character{}, fmt.Errorf("PUT %q: %w", c.urls.Character(id), err)
+	}
+
+	return mapper.CharacterResponseToCharacter(data), nil
+}
+
+// PatchCharacterHandler merges a JSON Merge Patch into the stored sheet.
+//
+// It answers with the whole character rather than the patched fragment, as the
+// replace handler does: the response is a representation of the resource, and
+// a client needs the new version off it to make its next write conditional.
+func PatchCharacterHandler(app *app.App) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := character.CharacterID(mux.Vars(r)["id"])
+
+		var req v1alpha.PatchCharacterRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			problem.New().
+				Detail(err.Error()).
+				Title("invalid_request").
+				Wrap(err).
+				Status(http.StatusBadRequest).
+				WriteTo(w)
+			return
+		}
+
+		chr, err := app.CharacterService.Patch(r.Context(), id, req)
+		if err != nil {
+			// Same override as create and replace: everything ErrInvalid can
+			// mean here — a patch that is not an object, one naming a
+			// server-owned field, one merging into a sheet the schema refuses
+			// — is a fact about the body. Not-found and conflict take the
+			// defaults, so a lost race still answers 409.
+			WriteError(w, r, err, Status(common.ErrInvalid, http.StatusBadRequest))
+			return
+		}
+
+		res := mapper.CharacterToResponse(chr)
+		w.Header().Set("Content-Type", v1alpha.ContentTypeCharacterJSON)
+		json.NewEncoder(w).Encode(res)
+	}
+}
+
+// PatchCharacter merges a JSON Merge Patch into the stored sheet, through
+// PATCH. The whole-document counterpart is [Client.UpdateCharacter].
+func (c *Client) PatchCharacter(ctx context.Context, id character.CharacterID, req v1alpha.PatchCharacterRequest) (character.Character, error) {
 	raw, err := json.Marshal(req)
 	if err != nil {
 		return character.Character{}, fmt.Errorf("PATCH %q: %w", c.urls.Character(id), err)

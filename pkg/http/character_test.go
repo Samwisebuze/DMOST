@@ -25,6 +25,7 @@ type FakeCharacterService struct {
 	FindFn   func(context.Context, string) (character.Character, error)
 	CreateFn func(context.Context, v1alpha.CreateCharacterRequest) (character.Character, error)
 	UpdateFn func(context.Context, character.CharacterID, v1alpha.UpdateCharacterRequest) (character.Character, error)
+	PatchFn  func(context.Context, character.CharacterID, v1alpha.PatchCharacterRequest) (character.Character, error)
 }
 
 var _ app.CharacterService = FakeCharacterService{}
@@ -42,6 +43,11 @@ func (f FakeCharacterService) Create(ctx context.Context, r v1alpha.CreateCharac
 // Update implements [app.CharacterService].
 func (f FakeCharacterService) Update(ctx context.Context, id character.CharacterID, r v1alpha.UpdateCharacterRequest) (character.Character, error) {
 	return f.UpdateFn(ctx, id, r)
+}
+
+// Patch implements [app.CharacterService].
+func (f FakeCharacterService) Patch(ctx context.Context, id character.CharacterID, r v1alpha.PatchCharacterRequest) (character.Character, error) {
+	return f.PatchFn(ctx, id, r)
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -143,7 +149,7 @@ func TestCreateCharacterHandler_PassesTheSheetThroughVerbatim(t *testing.T) {
 	assert.Equal(t, string(sheet), string(res.Sheet), "an unknown field must survive back out to the client")
 }
 
-func TestUpdateCharacterHandler_MapsErrorsToStatus(t *testing.T) {
+func TestReplaceCharacterHandler_MapsErrorsToStatus(t *testing.T) {
 	body, err := json.Marshal(v1alpha.UpdateCharacterRequest{Sheet: test.MustCharacterSheet(t)})
 	require.NoError(t, err)
 
@@ -170,7 +176,7 @@ func TestUpdateCharacterHandler_MapsErrorsToStatus(t *testing.T) {
 			}
 
 			w := httptest.NewRecorder()
-			http.UpdateCharacterHandler(&a)(w, characterRequest(t, nethttp.MethodPatch, character.NewCharacterID(), body))
+			http.ReplaceCharacterHandler(&a)(w, characterRequest(t, nethttp.MethodPut, character.NewCharacterID(), body))
 
 			resp := w.Result()
 			assert.Equal(t, tc.wantStatus, resp.StatusCode)
@@ -183,7 +189,7 @@ func TestUpdateCharacterHandler_MapsErrorsToStatus(t *testing.T) {
 	}
 }
 
-func TestUpdateCharacterHandler_PassesTheIDAndRequestThrough(t *testing.T) {
+func TestReplaceCharacterHandler_PassesTheIDAndRequestThrough(t *testing.T) {
 	id := character.NewCharacterID()
 	body, err := json.Marshal(v1alpha.UpdateCharacterRequest{Version: ptr(uint64(3))})
 	require.NoError(t, err)
@@ -198,7 +204,7 @@ func TestUpdateCharacterHandler_PassesTheIDAndRequestThrough(t *testing.T) {
 		},
 	}
 
-	http.UpdateCharacterHandler(&a)(httptest.NewRecorder(), characterRequest(t, nethttp.MethodPatch, id, body))
+	http.ReplaceCharacterHandler(&a)(httptest.NewRecorder(), characterRequest(t, nethttp.MethodPut, id, body))
 
 	assert.Equal(t, id, gotID)
 	require.NotNil(t, gotReq.Version, "the expected version must survive decoding, or every update is unconditional")
@@ -206,16 +212,119 @@ func TestUpdateCharacterHandler_PassesTheIDAndRequestThrough(t *testing.T) {
 	// Not nil: a nil json.RawMessage encodes as JSON null, so this is what an
 	// omitted sheet looks like by the time it has been through the wire. The
 	// mapper reads those bytes as "leave the stored sheet alone" — see
-	// mapper.sheetOmitted — which is why the transport can pass them straight
+	// mapper.rawOmitted — which is why the transport can pass them straight
 	// through rather than special-casing them here.
 	assert.JSONEq(t, "null", string(gotReq.Sheet), "an omitted sheet must not arrive as content")
 }
 
-func TestUpdateCharacterHandler_Returns400OnAnUndecodableBody(t *testing.T) {
+func TestReplaceCharacterHandler_Returns400OnAnUndecodableBody(t *testing.T) {
 	var a app.App
 
 	w := httptest.NewRecorder()
-	http.UpdateCharacterHandler(&a)(w, characterRequest(t, nethttp.MethodPatch, character.NewCharacterID(), nil))
+	http.ReplaceCharacterHandler(&a)(w, characterRequest(t, nethttp.MethodPut, character.NewCharacterID(), nil))
+
+	resp := w.Result()
+	assert.Equal(t, nethttp.StatusBadRequest, resp.StatusCode)
+	assert.Equal(t, problem.ContentTypeJSON, resp.Header.Get("Content-Type"))
+}
+
+func TestPatchCharacterHandler_MapsErrorsToStatus(t *testing.T) {
+	body, err := json.Marshal(v1alpha.PatchCharacterRequest{
+		Patch: json.RawMessage(`{"campaign_id":"night-below"}`),
+	})
+	require.NoError(t, err)
+
+	tests := map[string]struct {
+		err        error
+		wantStatus int
+	}{
+		"success":           {nil, nethttp.StatusOK},
+		"unknown character": {common.ErrNotFound, nethttp.StatusNotFound},
+		// ErrConflict does not wrap ErrInvalid, so it must reach its own arm
+		// rather than falling into the 400 below.
+		"stale version":        {common.ErrConflict, nethttp.StatusConflict},
+		"unschematic merge":    {common.ErrInvalid, nethttp.StatusBadRequest},
+		"wrapping ErrInvalid":  {common.ErrExists, nethttp.StatusBadRequest},
+		"unrecognised failure": {assert.AnError, nethttp.StatusInternalServerError},
+	}
+	for label, tc := range tests {
+		t.Run(label, func(t *testing.T) {
+			var a app.App
+			a.CharacterService = FakeCharacterService{
+				PatchFn: func(context.Context, character.CharacterID, v1alpha.PatchCharacterRequest) (character.Character, error) {
+					return character.Character{}, tc.err
+				},
+			}
+
+			w := httptest.NewRecorder()
+			http.PatchCharacterHandler(&a)(w, characterRequest(t, nethttp.MethodPatch, character.NewCharacterID(), body))
+
+			resp := w.Result()
+			assert.Equal(t, tc.wantStatus, resp.StatusCode)
+			if tc.err == nil {
+				assert.Equal(t, v1alpha.ContentTypeCharacterJSON, resp.Header.Get("Content-Type"))
+				return
+			}
+			assert.Equal(t, problem.ContentTypeJSON, resp.Header.Get("Content-Type"))
+		})
+	}
+}
+
+func TestPatchCharacterHandler_PassesTheIDAndRequestThrough(t *testing.T) {
+	id := character.NewCharacterID()
+	patch := json.RawMessage(`{"identity":{"character_name":"Vex"}}`)
+	body, err := json.Marshal(v1alpha.PatchCharacterRequest{Patch: patch, Version: ptr(uint64(3))})
+	require.NoError(t, err)
+
+	var gotID character.CharacterID
+	var gotReq v1alpha.PatchCharacterRequest
+	var a app.App
+	a.CharacterService = FakeCharacterService{
+		PatchFn: func(_ context.Context, id character.CharacterID, req v1alpha.PatchCharacterRequest) (character.Character, error) {
+			gotID, gotReq = id, req
+			return character.Character{}, nil
+		},
+	}
+
+	http.PatchCharacterHandler(&a)(httptest.NewRecorder(), characterRequest(t, nethttp.MethodPatch, id, body))
+
+	assert.Equal(t, id, gotID)
+	require.NotNil(t, gotReq.Version, "the expected version must survive decoding, or every patch is unconditional")
+	assert.EqualValues(t, 3, *gotReq.Version)
+	// The transport hands the patch to the service as the bytes it arrived as.
+	// It has no business reading inside one: which keys a patch may name is the
+	// mapper's rule, and every way of breaking it is already an ErrInvalid.
+	assert.Equal(t, string(patch), string(gotReq.Patch), "the patch must arrive unread")
+}
+
+// The same null-for-omitted round trip the replace handler relies on, and for
+// the same reason: a client with nothing to send but a version must not get a
+// 400. See mapper.rawOmitted.
+func TestPatchCharacterHandler_PassesAnOmittedPatchThrough(t *testing.T) {
+	body, err := json.Marshal(v1alpha.PatchCharacterRequest{Version: ptr(uint64(3))})
+	require.NoError(t, err)
+
+	var gotReq v1alpha.PatchCharacterRequest
+	var a app.App
+	a.CharacterService = FakeCharacterService{
+		PatchFn: func(_ context.Context, _ character.CharacterID, req v1alpha.PatchCharacterRequest) (character.Character, error) {
+			gotReq = req
+			return character.Character{}, nil
+		},
+	}
+
+	w := httptest.NewRecorder()
+	http.PatchCharacterHandler(&a)(w, characterRequest(t, nethttp.MethodPatch, character.NewCharacterID(), body))
+
+	assert.Equal(t, nethttp.StatusOK, w.Result().StatusCode)
+	assert.JSONEq(t, "null", string(gotReq.Patch), "an omitted patch must not arrive as content")
+}
+
+func TestPatchCharacterHandler_Returns400OnAnUndecodableBody(t *testing.T) {
+	var a app.App
+
+	w := httptest.NewRecorder()
+	http.PatchCharacterHandler(&a)(w, characterRequest(t, nethttp.MethodPatch, character.NewCharacterID(), nil))
 
 	resp := w.Result()
 	assert.Equal(t, nethttp.StatusBadRequest, resp.StatusCode)

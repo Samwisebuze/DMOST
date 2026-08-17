@@ -23,14 +23,41 @@ type CreateCharacterRequest struct {
 }
 
 // UpdateCharacterRequest mirrors [CreateCharacterRequest]. An omitted Sheet
-// leaves the stored one unchanged; a present one replaces it whole, because a
-// sheet is one document and v1alpha has no patch shape for it.
+// leaves the stored one unchanged; a present one replaces it whole. Editing
+// part of a sheet is [PatchCharacterRequest]'s job.
 type UpdateCharacterRequest struct {
 	Sheet json.RawMessage `json:"sheet"`
 
 	// Version is the revision the client last read. Supplying it makes the
 	// update conditional: it is refused if someone else has written since.
 	// Omitting it means last writer wins. See [UpdateUserRequest.Version].
+	Version *uint64 `json:"version"`
+}
+
+// PatchCharacterRequest carries a JSON Merge Patch (RFC 7396) to apply to the
+// stored sheet: objects merge recursively, a null deletes the key it names,
+// and an array replaces the array it lands on rather than merging into it. An
+// omitted patch leaves the sheet alone, the same way an omitted Sheet does on
+// [UpdateCharacterRequest].
+//
+// It carries the one property this resource otherwise keeps. A create or a
+// replace stores the client's own bytes, so a field the generated v1alpha type
+// knows nothing about survives verbatim, in place. Merging cannot: it decodes
+// both documents, merges, and re-encodes, and Go sorts object keys on the way
+// out. **Unknown fields still survive** — they are carried through the decoded
+// value like any other — but key order and whitespace do not. A client that
+// needs its exact bytes back should PUT.
+//
+// The body is this envelope rather than a bare merge patch document, because
+// Version has to ride along beside it; that is also why the request media type
+// stays [ContentTypeJSON] and is not application/merge-patch+json, which would
+// promise a body shape this is not.
+type PatchCharacterRequest struct {
+	Patch json.RawMessage `json:"patch"`
+
+	// Version is the revision the client last read, with the same meaning as
+	// [UpdateCharacterRequest.Version]: supplied makes the patch conditional,
+	// omitted means last writer wins.
 	Version *uint64 `json:"version"`
 }
 

@@ -133,9 +133,14 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	)
 
 	// Override method for forms passing "_method" value.
+	//
+	// The list must cover every method the router registers. A method missing
+	// from it is not rejected here — it simply falls through as a POST and
+	// reaches the router as one, which then answers 405 for a route that does
+	// exist.
 	if r.Method == http.MethodPost {
 		switch v := r.PostFormValue("_method"); v {
-		case http.MethodGet, http.MethodPost, http.MethodPatch, http.MethodDelete:
+		case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
 			r.Method = v
 		}
 	}

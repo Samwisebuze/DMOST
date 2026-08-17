@@ -61,6 +61,24 @@ type CharacterService interface {
 	// or the request carries a Version no client could have read.
 	Update(context.Context, character.CharacterID, v1alpha.UpdateCharacterRequest) (character.Character, error)
 
+	// Patch loads the Character and merges the request's JSON Merge Patch
+	// (RFC 7396) into its sheet, if the request carries one. It is Update's
+	// partial counterpart: a patch names only what it changes, a null in it
+	// deletes the key it names, and an array in it replaces the array it lands
+	// on. The merged result goes through the same schema gate a replacement
+	// does, so a patch that deletes a required section is refused.
+	//
+	// Unlike Create and Update, this does not store the client's bytes: the
+	// merge decodes and re-encodes, so object keys come back sorted. Fields
+	// the v1alpha type does not know about survive; their position does not.
+	// See [v1alpha.PatchCharacterRequest].
+	//
+	// Errors come from pkg/domain/common: ErrNotFound if no such Character
+	// exists, ErrConflict if the request carries a Version the stored
+	// Character has moved past, and ErrInvalid if the patch is not an object,
+	// names a server-owned field, or merges into a sheet the schema refuses.
+	Patch(context.Context, character.CharacterID, v1alpha.PatchCharacterRequest) (character.Character, error)
+
 	// Find takes the ID unparsed, so a malformed one is an ErrInvalid from
 	// this layer rather than something the transport has to pre-check.
 	Find(context.Context, string) (character.Character, error)

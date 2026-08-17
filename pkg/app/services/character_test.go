@@ -201,3 +201,123 @@ func TestCharacterService_Update(t *testing.T) {
 		require.ErrorIs(t, err, common.ErrNotFound)
 	})
 }
+
+func TestCharacterService_Patch(t *testing.T) {
+	t.Run("merges into the stored sheet", func(t *testing.T) {
+		sut, chr := seedCharacter(t, test.MustCharacterSheetNamed(t, "Bruenor"))
+
+		got, err := sut.Patch(context.Background(), chr.ID(), v1alpha.PatchCharacterRequest{
+			Patch: json.RawMessage(`{"identity":{"character_name":"Catti-brie"}}`),
+		})
+		require.NoError(t, err)
+
+		assert.JSONEq(t, string(test.MustCharacterSheetNamed(t, "Catti-brie")), string(got.Data()),
+			"the patched name, and nothing else, must differ from the seed")
+		assert.Equal(t, chr.ID(), got.ID(), "identity rides along on the loaded aggregate")
+		assert.Equal(t, chr.CreatedAt(), got.CreatedAt(), "CreatedAt rides along too")
+
+		found, err := sut.Find(context.Background(), chr.ID().String())
+		require.NoError(t, err)
+		assert.JSONEq(t, string(got.Data()), string(found.Data()))
+	})
+
+	t.Run("an omitted patch leaves the stored sheet unchanged", func(t *testing.T) {
+		sut, chr := seedCharacter(t, test.MustCharacterSheetNamed(t, "Bruenor"))
+
+		got, err := sut.Patch(context.Background(), chr.ID(), v1alpha.PatchCharacterRequest{})
+		require.NoError(t, err)
+		assert.JSONEq(t, string(chr.Data()), string(got.Data()))
+	})
+
+	t.Run("advances the version", func(t *testing.T) {
+		sut, chr := seedCharacter(t, test.MustCharacterSheet(t))
+
+		got, err := sut.Patch(context.Background(), chr.ID(), v1alpha.PatchCharacterRequest{
+			Patch: json.RawMessage(`{"identity":{"character_name":"Wulfgar"}}`),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, chr.Version().Next(), got.Version())
+	})
+
+	t.Run("consecutive patches build on each other", func(t *testing.T) {
+		// Two clients editing unrelated sections is the reason PATCH exists;
+		// neither may undo the other.
+		sut, chr := seedCharacter(t, test.MustCharacterSheet(t))
+
+		_, err := sut.Patch(context.Background(), chr.ID(), v1alpha.PatchCharacterRequest{
+			Patch: json.RawMessage(`{"campaign_id":"night-below"}`),
+		})
+		require.NoError(t, err)
+
+		got, err := sut.Patch(context.Background(), chr.ID(), v1alpha.PatchCharacterRequest{
+			Patch: json.RawMessage(`{"identity":{"character_name":"Regis"}}`),
+		})
+		require.NoError(t, err)
+
+		var doc map[string]any
+		require.NoError(t, json.Unmarshal(got.Data(), &doc))
+		assert.Equal(t, "night-below", doc["campaign_id"], "the first patch must survive the second")
+		assert.Equal(t, "Regis", doc["identity"].(map[string]any)["character_name"])
+	})
+
+	t.Run("a stale version is a conflict", func(t *testing.T) {
+		sut, chr := seedCharacter(t, test.MustCharacterSheet(t))
+		stale := chr.Version().Uint64()
+
+		_, err := sut.Patch(context.Background(), chr.ID(), v1alpha.PatchCharacterRequest{
+			Patch: json.RawMessage(`{"identity":{"character_name":"Wulfgar"}}`),
+		})
+		require.NoError(t, err)
+
+		_, err = sut.Patch(context.Background(), chr.ID(), v1alpha.PatchCharacterRequest{
+			Patch:   json.RawMessage(`{"identity":{"character_name":"Regis"}}`),
+			Version: ptr(stale),
+		})
+		require.ErrorIs(t, err, common.ErrConflict)
+	})
+
+	t.Run("a version no client could have read is invalid", func(t *testing.T) {
+		sut, chr := seedCharacter(t, test.MustCharacterSheet(t))
+
+		_, err := sut.Patch(context.Background(), chr.ID(), v1alpha.PatchCharacterRequest{
+			Patch:   json.RawMessage(`{"campaign_id":"night-below"}`),
+			Version: ptr(uint64(0)),
+		})
+		require.ErrorIs(t, err, common.ErrInvalid)
+	})
+
+	t.Run("a server-owned key does not touch the stored sheet", func(t *testing.T) {
+		sut, chr := seedCharacter(t, test.MustCharacterSheetNamed(t, "Bruenor"))
+
+		_, err := sut.Patch(context.Background(), chr.ID(), v1alpha.PatchCharacterRequest{
+			Patch: json.RawMessage(`{"_id":"hijacked"}`),
+		})
+		require.ErrorIs(t, err, common.ErrInvalid)
+
+		found, err := sut.Find(context.Background(), chr.ID().String())
+		require.NoError(t, err)
+		assert.JSONEq(t, string(chr.Data()), string(found.Data()))
+	})
+
+	t.Run("a merge the schema refuses does not touch the stored sheet", func(t *testing.T) {
+		sut, chr := seedCharacter(t, test.MustCharacterSheetNamed(t, "Bruenor"))
+
+		_, err := sut.Patch(context.Background(), chr.ID(), v1alpha.PatchCharacterRequest{
+			Patch: json.RawMessage(`{"vitals":null}`),
+		})
+		require.ErrorIs(t, err, common.ErrInvalid)
+
+		found, err := sut.Find(context.Background(), chr.ID().String())
+		require.NoError(t, err)
+		assert.JSONEq(t, string(chr.Data()), string(found.Data()))
+	})
+
+	t.Run("an unknown character is not found", func(t *testing.T) {
+		sut, _ := seedCharacter(t, test.MustCharacterSheet(t))
+
+		_, err := sut.Patch(context.Background(), character.NewCharacterID(), v1alpha.PatchCharacterRequest{
+			Patch: json.RawMessage(`{"campaign_id":"night-below"}`),
+		})
+		require.ErrorIs(t, err, common.ErrNotFound)
+	})
+}

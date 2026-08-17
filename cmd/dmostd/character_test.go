@@ -224,3 +224,215 @@ func TestCharactersAPI_UpdateUnknownCharacter(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Not Found")
 }
+
+// MustPatchCharacter applies patch and fails the test if the server refuses.
+func MustPatchCharacter(t testing.TB, cli *http.Client, id domain.CharacterID, patch string) domain.Character {
+	t.Helper()
+	chr, err := cli.PatchCharacter(context.Background(), id, v1alpha.PatchCharacterRequest{
+		Patch: json.RawMessage(patch),
+	})
+	require.NoError(t, err)
+	return chr
+}
+
+// MustSheetDoc decodes a stored sheet so assertions can reach inside it.
+//
+// Patch responses are compared this way rather than as bytes, unlike every
+// other assertion in this file: a merge re-encodes, so the bytes are equivalent
+// JSON in a different key order. That is the documented cost of PATCH — see
+// v1alpha.PatchCharacterRequest — and asserting on bytes here would be
+// asserting on Go's map ordering rather than on the contract.
+func MustSheetDoc(t testing.TB, raw json.RawMessage) map[string]any {
+	t.Helper()
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(raw, &doc))
+	return doc
+}
+
+func TestCharactersAPI_Patch(t *testing.T) {
+	t.Parallel()
+
+	m := MustRunMain(t)
+	defer MustCloseMain(t, m)
+
+	cli := MustClient(t, m.HTTPServer.URL())
+	created := MustCreateCharacter(t, cli, MustSheet(t, "Bruenor"))
+	before := MustSheetDoc(t, created.Data())
+
+	got := MustPatchCharacter(t, cli, created.ID(), `{"identity":{"character_name":"Catti-brie"}}`)
+
+	after := MustSheetDoc(t, got.Data())
+	assert.Equal(t, "Catti-brie", after["identity"].(map[string]any)["character_name"])
+	assert.Equal(t, created.ID(), got.ID())
+	assert.Equal(t, created.Version().Next(), got.Version(),
+		"a patch is a write, so the revision must move")
+
+	for key, want := range before {
+		if key == "identity" {
+			continue
+		}
+		assert.Equal(t, want, after[key], "patching identity must not disturb %q", key)
+	}
+
+	// And it must be what a later reader sees, not just what the write echoed.
+	found, err := cli.FindCharacter(context.Background(), created.ID())
+	require.NoError(t, err)
+	assert.Equal(t, after, MustSheetDoc(t, found.Data()))
+}
+
+// The reason PATCH exists: two clients editing unrelated sections, neither
+// having to send — or even hold — the rest of the document.
+func TestCharactersAPI_PatchDoesNotClobberAnUnrelatedSection(t *testing.T) {
+	t.Parallel()
+
+	m := MustRunMain(t)
+	defer MustCloseMain(t, m)
+
+	cli := MustClient(t, m.HTTPServer.URL())
+	created := MustCreateCharacter(t, cli, MustSheet(t, "Bruenor"))
+
+	MustPatchCharacter(t, cli, created.ID(), `{"campaign_id":"night-below"}`)
+	got := MustPatchCharacter(t, cli, created.ID(), `{"identity":{"character_name":"Regis"}}`)
+
+	doc := MustSheetDoc(t, got.Data())
+	assert.Equal(t, "night-below", doc["campaign_id"], "the first patch must survive the second")
+	assert.Equal(t, "Regis", doc["identity"].(map[string]any)["character_name"])
+}
+
+// Key order does not survive a merge; unknown fields do. That distinction is
+// the whole trade-off PATCH makes, so it is asserted rather than assumed.
+func TestCharactersAPI_PatchKeepsFieldsTheSchemaDoesNotKnow(t *testing.T) {
+	t.Parallel()
+
+	m := MustRunMain(t)
+	defer MustCloseMain(t, m)
+
+	cli := MustClient(t, m.HTTPServer.URL())
+	created := MustCreateCharacter(t, cli, MustSheet(t, "Bruenor"))
+
+	got := MustPatchCharacter(t, cli, created.ID(), `{"identity":{"character_name":"Regis"}}`)
+
+	assert.Equal(t, "crits do max damage", MustSheetDoc(t, got.Data())["house_rule_notes"])
+}
+
+func TestCharactersAPI_PatchNullDeletesAKey(t *testing.T) {
+	t.Parallel()
+
+	m := MustRunMain(t)
+	defer MustCloseMain(t, m)
+
+	cli := MustClient(t, m.HTTPServer.URL())
+	created := MustCreateCharacter(t, cli, MustSheet(t, "Bruenor"))
+
+	set := MustPatchCharacter(t, cli, created.ID(), `{"campaign_id":"night-below"}`)
+	require.Contains(t, MustSheetDoc(t, set.Data()), "campaign_id")
+
+	cleared := MustPatchCharacter(t, cli, created.ID(), `{"campaign_id":null}`)
+	assert.NotContains(t, MustSheetDoc(t, cleared.Data()), "campaign_id")
+}
+
+func TestCharactersAPI_PatchWithoutAPatchLeavesTheStoredSheetAlone(t *testing.T) {
+	t.Parallel()
+
+	m := MustRunMain(t)
+	defer MustCloseMain(t, m)
+
+	cli := MustClient(t, m.HTTPServer.URL())
+	created := MustCreateCharacter(t, cli, MustSheet(t, "Bruenor"))
+
+	got, err := cli.PatchCharacter(context.Background(), created.ID(), v1alpha.PatchCharacterRequest{
+		Version: ptr(created.Version().Uint64()),
+	})
+	require.NoError(t, err)
+
+	// Nothing was merged, so this one keeps the client's bytes.
+	assert.Equal(t, string(created.Data()), string(got.Data()))
+}
+
+func TestCharactersAPI_PatchRejectsAStaleVersion(t *testing.T) {
+	t.Parallel()
+
+	m := MustRunMain(t)
+	defer MustCloseMain(t, m)
+
+	cli := MustClient(t, m.HTTPServer.URL())
+	created := MustCreateCharacter(t, cli, MustSheet(t, "Bruenor"))
+	stale := created.Version().Uint64()
+
+	MustPatchCharacter(t, cli, created.ID(), `{"identity":{"character_name":"Regis"}}`)
+
+	_, err := cli.PatchCharacter(context.Background(), created.ID(), v1alpha.PatchCharacterRequest{
+		Patch:   json.RawMessage(`{"identity":{"character_name":"Wulfgar"}}`),
+		Version: ptr(stale),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Conflict")
+}
+
+func TestCharactersAPI_PatchRejectsAServerOwnedKey(t *testing.T) {
+	t.Parallel()
+
+	m := MustRunMain(t)
+	defer MustCloseMain(t, m)
+
+	cli := MustClient(t, m.HTTPServer.URL())
+	created := MustCreateCharacter(t, cli, MustSheet(t, "Bruenor"))
+
+	_, err := cli.PatchCharacter(context.Background(), created.ID(), v1alpha.PatchCharacterRequest{
+		Patch: json.RawMessage(`{"_id":"hijacked"}`),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Bad Request")
+
+	found, err := cli.FindCharacter(context.Background(), created.ID())
+	require.NoError(t, err)
+	assert.Equal(t, string(created.Data()), string(found.Data()), "a refused patch must change nothing")
+	assert.Equal(t, created.Version(), found.Version())
+}
+
+func TestCharactersAPI_PatchRejectsAMergeTheSchemaRefuses(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]string{
+		"deletes a required section": `{"vitals":null}`,
+		"breaks a required pattern":  `{"schema_version":"nope"}`,
+		"is not an object":           `5`,
+	}
+
+	for name, patch := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			m := MustRunMain(t)
+			defer MustCloseMain(t, m)
+
+			cli := MustClient(t, m.HTTPServer.URL())
+			created := MustCreateCharacter(t, cli, MustSheet(t, "Bruenor"))
+
+			_, err := cli.PatchCharacter(context.Background(), created.ID(), v1alpha.PatchCharacterRequest{
+				Patch: json.RawMessage(patch),
+			})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "Bad Request")
+
+			found, err := cli.FindCharacter(context.Background(), created.ID())
+			require.NoError(t, err)
+			assert.Equal(t, string(created.Data()), string(found.Data()))
+		})
+	}
+}
+
+func TestCharactersAPI_PatchUnknownCharacter(t *testing.T) {
+	t.Parallel()
+
+	m := MustRunMain(t)
+	defer MustCloseMain(t, m)
+
+	cli := MustClient(t, m.HTTPServer.URL())
+
+	_, err := cli.PatchCharacter(context.Background(), domain.NewCharacterID(), v1alpha.PatchCharacterRequest{
+		Patch: json.RawMessage(`{"campaign_id":"night-below"}`),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Not Found")
+}
