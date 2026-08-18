@@ -4,7 +4,7 @@ title: Autosave is unvalidated; validation gates the boundaries
 updated: 2026-08-18
 status:
   - kind: proposed
-  - version: v0
+  - version: v0.1
 supersedes:
   - ARD-0001 decision 8 — explicit save, with a conflict prompt
 related:
@@ -20,7 +20,13 @@ related:
 **Proposed.** Reverses ARD 0001 decision 8, which considered autosave and rejected it. The argument
 that changed the answer is ARD 0006, which did not exist when that record was written.
 
-**Revisions.** v0 — initial draft.
+**Revisions.**
+
+- **v0** — initial draft.
+- **v0.1** — review pass against ARD 0003's load path. §3's "the store may hold an invalid document" is
+  too loose: composed with validate-then-decode, it lets the tool write a document it cannot reopen
+  (§7). Tightens the invariant and adds the recovery path. Also stops §1 promising a flush it cannot
+  deliver on every exit path (§8).
 
 ## Context
 
@@ -60,10 +66,7 @@ boundaries instead: explicit save, navigation away from the editor, and export.*
 
 Two seconds after the last mutation, the document is written through ARD 0002's `UPDATE`. No
 validation, no snapshot (ARD 0006 §2), no confirmation. The most work at risk at any moment is two
-seconds of it.
-
-Quitting cleanly flushes synchronously in the `tea.Program` quit path, so `q` and `Ctrl+C` do not
-depend on a pending timer.
+seconds of it — and per §8, that is the guarantee, not the flush.
 
 ### 2. Validation runs at five places, and none of them is the debounce
 
@@ -109,6 +112,52 @@ reapply — ARD 0001's modal is superseded rather than reimplemented.
 Detection without resolution is worth having anyway: it is the difference between a lost write and a
 reported one, and it costs nothing because it falls out of writing the `UPDATE` correctly.
 
+### 7. The invariant is *decodable always*, valid only at the gates
+
+§3 as v0 stated it is too weak, and composing it with ARD 0003 shows why. That record validates before
+decoding so that a bad document yields JSON Pointer paths rather than Go type errors. But the generated
+tree enforces things of its own during decode — enum membership, and numeric bounds:
+
+```go
+if plain.SlotsUsed != nil && 0 > *plain.SlotsUsed {
+	return fmt.Errorf("field %s: must be >= %v", "slots_used", 0)
+}
+```
+
+An editor holding `slots_used = -1` in memory re-encodes it happily, autosave writes it, and the next
+`open` cannot decode it at all. The read-only-with-banner path in §4 does not save the user, because
+there is no document in memory to acknowledge a banner about. **A tool that cannot reopen a file it
+wrote has no excuse**, and unvalidated autosave is exactly the mechanism that produces one.
+
+So the invariant is split in two:
+
+| property | when it holds | enforced by |
+| --- | --- | --- |
+| the stored document **decodes** into the generated tree | always | field-level input constraints in the editor |
+| the stored document **validates** against the schema | at the gates in §2 only | the compiled schema |
+
+The first is the editor's obligation: a numeric field refuses a value outside the schema's bounds at
+input time, and an enum field can only be set to a member. That is the same inline refusal ARD 0003's
+hand-written exceptions provide for slot keys and Exhaustion levels, applied as a general rule rather
+than to two special cases. It is not a validation gate — it is narrower and cheaper, and it is what
+makes autosave safe to leave ungated.
+
+And because "always" enforced by convention is not always, `open` gets a fallback: a decode failure
+drops to a recovery path that reports the offending field, offers the newest snapshot (ARD 0006) as a
+restore target, and offers the raw JSON for export. Read-only until acknowledged, then editable — the
+user must be able to repair the document the tool broke.
+
+### 8. What the exit path can and cannot promise
+
+v0 said quitting flushes synchronously in the `tea.Program` quit path. That is true for `q` and for
+`Ctrl+C`, which Bubble Tea delivers as a message. It is not true for `SIGHUP` from a closed terminal,
+for `SIGTERM`, or for a killed process, and writing a signal handler for each would mean a write racing
+a teardown that is already in progress.
+
+**The debounce is the guarantee; the flush is an optimization.** Two seconds of loss on an abrupt exit
+is the stated worst case, and it is the number to argue with if anyone finds it too high. Claiming a
+clean flush on every exit path would be a promise the runtime cannot keep.
+
 ## Consequences
 
 - **ARD 0001's exploratory-editing objection is accepted and unaddressed at the storage layer.** Every
@@ -118,5 +167,9 @@ reported one, and it costs nothing because it falls out of writing the `UPDATE` 
   invalid documents, and that is correct behaviour rather than a failure of the tool.
 - **The `⚠` indicator is now load-bearing UI**, not decoration: it is the only thing standing between
   unvalidated autosave and a user surprised at save time.
+- **Field-level input constraints become mandatory rather than a nicety** (§7), and they are the one
+  piece of validation that cannot be deferred to a gate.
+- **`open` needs a path for documents it cannot decode**, which is code that exists solely to survive
+  this decision being imperfectly implemented.
 - **A conflict is a dead end in v1.** The banner tells the user their write did not land and offers
   nothing to do about it beyond copying values out by hand.
