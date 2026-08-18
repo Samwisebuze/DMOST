@@ -4,7 +4,7 @@ title: play_log enters character.schema.json as Phase 0 pre-work
 updated: 2026-08-18
 status:
   - kind: proposed
-  - version: v0
+  - version: v0.1
 related:
   - docs/psd/0001_character-management-tui.md
   - docs/psd/0002_gm-managment-tui.md
@@ -18,7 +18,12 @@ related:
 **Proposed.** This is the first record that changes the character document format. It supersedes
 nothing; it precedes everything, and PSD-0001 §11 schedules it as Phase 0 for the reasons in §2 below.
 
-**Revisions.** v0 — initial draft.
+**Revisions.**
+
+- **v0** — initial draft.
+- **v0.1** — review pass across the surfaces v0 did not look at. Two additions: the HTTP patch path can
+  rewrite the play log today and must not (§6), and the `schema_version` bump turns out to be advisory,
+  which constrains every future change to this schema (§7).
 
 ## Context
 
@@ -109,6 +114,49 @@ exemption. The asymmetry with `build_log` is the point: build decisions *are* sh
 a sheet rewinds them, whereas the play log records things that happened in the world, and rewinding a
 character sheet does not un-happen a session. Restore's confirmation names the exemption.
 
+### 6. `play_log` becomes a server-owned key at the HTTP boundary
+
+PSD-0001 designs for a local store and never considers the daemon, but the daemon already serves
+`PATCH` over the same document, and `mapper.serverOwnedSheetKeys` is the list of root fields a client
+may not write:
+
+```go
+var serverOwnedSheetKeys = []string{
+	"_id", "doc_type", "schema_version",
+	"created_at", "updated_at", "doc_revision", "owner_user_id",
+}
+```
+
+`play_log` is not on it, and by default a new root property is patchable. So the moment this schema
+change lands, an HTTP client can send `{"play_log": []}` and empty the record of every patch ever
+applied — and the next `patch apply` would re-award all of it. That is the same double-award §5 rules
+out for `restore`, arriving through a door §5 does not cover.
+
+**`play_log` is added to `serverOwnedSheetKeys`.** The rationale in that variable's own doc comment
+applies unchanged: these are fields whose modification would let a client rewrite its own history in
+place. Refusing beats stripping, for the reason `rejectServerOwnedKeys` already states — a client that
+thinks it appended an entry has a bug, and dropping the field silently would let it keep believing.
+
+This leaves a question this record does not answer: if the GM tool ever applies patches *through* the
+daemon rather than locally, it needs a write path to the log, and a merge patch will not be it — a
+merge patch on an array replaces the whole array, which is wrong for an append-only log regardless of
+who is allowed to send it. That is a decision for whenever PSD-0002 grows a network story, and it is
+better faced then than pre-empted with a rule nothing uses.
+
+### 7. The version bump is advisory, and that constrains what may follow
+
+Nothing enforces `schema_version`. The schema constrains it to `^\d+\.\d+\.\d+$` and no more, and
+no Go code reads it: it appears in `mapper.serverOwnedSheetKeys` as unpatchable and in two tests as a
+pattern fixture, and nowhere else. §6's "mismatch banner" is a TUI behaviour this record's change
+enables, not a gate anything already has.
+
+**That is accepted, and it is a real constraint rather than a shrug.** A document is always validated
+against the single vendored current schema (ARD 0003), so there is no multi-version validation and no
+plan for any. The rule that falls out: **every subsequent change to `character.schema.json` within
+`v1alpha` must be additive and optional**, or documents at an older `schema_version` become invalid
+under a validator that has no way to know it should be lenient with them. A change that cannot be
+additive is the change that forces the new package §3 says this one does not.
+
 ## Consequences
 
 - **Phase 0 exists because of this record**, and PSD-0001's phasing is built around it: schema change,
@@ -119,6 +167,10 @@ character sheet does not un-happen a session. Restore's confirmation names the e
   record is discharged by a schema change rather than by a feature.
 - **v1 carries a field it cannot show.** Anyone reading the generated types will find `PlayLog` with no
   screen behind it, and the schema is the only place explaining why.
+- **The daemon's patch surface gains an unpatchable field**, so `mapper` and its tests change in
+  Phase 0 too — the schema is not the only file this touches.
+- **A future non-additive schema change is now expensive by construction** (§7), which is the price of
+  not building version-aware validation for a contract with no external consumers.
 - **`build_log` and `play_log` now differ in how `restore` treats them**, which is a rule that lives in
   the store rather than in the schema. Nothing in `character.schema.json` marks the exemption, so the
   only defence is ARD 0009's test that restore leaves the array untouched.
