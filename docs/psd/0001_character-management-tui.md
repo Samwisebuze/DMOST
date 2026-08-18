@@ -1,11 +1,21 @@
-# Product Specification: Character Management TUI
-
-**Component:** `dmosh` CLI — `character` subsystem
-**Status:** Draft v0.4.5
-**Audience:** Engineering (Go/TUI implementers), project contributors
-**Related docs:** `character.schema.json`, `dnd-2024-character-schema-report.md`
-
 ---
+id: PSD-0001
+title: Character Management TUI
+status: draft
+version: "0.4.5"
+updated: 2026-08-18
+component: 
+    - name: dmosh CLI
+    - subsystem: character
+audience:
+  - Engineering (Go/TUI implementers)
+  - Project contributors
+related:
+  - docs/jsonschema/character/v1alpha/classes.schema.json
+  - docs/psd/share/2024-character-schema-report.md
+---
+
+# Product Specification: Character Management TUI
 
 ## 0. Revision history and resolved decisions
 
