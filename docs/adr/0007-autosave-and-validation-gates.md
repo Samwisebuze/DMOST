@@ -4,7 +4,7 @@ title: Autosave is unvalidated; validation gates the boundaries
 updated: 2026-08-18
 status:
   - kind: proposed
-  - version: v0.1
+  - version: v0.2
 supersedes:
   - ARD-0001 decision 8 — explicit save, with a conflict prompt
 related:
@@ -23,6 +23,10 @@ that changed the answer is ARD 0006, which did not exist when that record was wr
 **Revisions.**
 
 - **v0** — initial draft.
+- **v0.2** — realigned to ARD 0002 v0.2. The two write paths this record needs are now two use cases on
+  `pkg/app` — `SaveCharacterDraft` and `ReplaceCharacter` — rather than one `UPDATE` with validation
+  bolted on or off. That is a better fit than what v0 described: the difference between them is a
+  difference in kind, and it now reads as one in the signature.
 - **v0.1** — review pass against ARD 0003's load path. §3's "the store may hold an invalid document" is
   too loose: composed with validate-then-decode, it lets the tool write a document it cannot reopen
   (§7). Tightens the invariant and adds the recovery path. Also stops §1 promising a flush it cannot
@@ -46,9 +50,10 @@ Three things have changed since.
 - **The undo boundary now exists independently.** ARD 0006 gives every mutation an undo frame and 50 of
   them a stack. "No undo boundary" was the strongest half of the objection, and it has been answered by
   a mechanism that does not depend on withholding writes.
-- **Reapply is no longer available.** ARD 0002 replaced merge patches with whole-document writes, and a
-  whole document cannot be replayed against a newer one. Half of ARD 0001's conflict modal is gone
-  regardless of what this record decides.
+- **Reapply is no longer available to the TUI.** ARD 0002 keeps `Patch` as the wire's partial-write
+  shape but has the editor write whole documents, since it holds the whole document already — and a whole
+  document cannot be replayed against a newer one the way a patch naming only changed fields can. Half of
+  ARD 0001's conflict modal is gone regardless of what this record decides.
 - **The tool is designed to be used at the table** (§12 question 1). §7.6's `+`/`-` HP adjusters and
   §7.8's one-key cast action are built for speed under time pressure, and the cost of losing five
   minutes of combat bookkeeping to a closed terminal is higher than the cost of durable intermediate
@@ -64,9 +69,12 @@ boundaries instead: explicit save, navigation away from the editor, and export.*
 
 ### 1. The debounce is the durability mechanism
 
-Two seconds after the last mutation, the document is written through ARD 0002's `UPDATE`. No
-validation, no snapshot (ARD 0006 §2), no confirmation. The most work at risk at any moment is two
-seconds of it — and per §8, that is the guarantee, not the flush.
+Two seconds after the last mutation, the document goes through `SaveCharacterDraft` (ARD 0002 §3) — no
+schema gate, no snapshot, no confirmation. The most work at risk at any moment is two seconds of it, and
+per §8 that is the guarantee, not the flush.
+
+The two write use cases exist so this distinction is visible at the call site rather than carried in a
+boolean: `SaveCharacterDraft` is the unvalidated one, `ReplaceCharacter` is the gate in §2.
 
 ### 2. Validation runs at five places, and none of them is the debounce
 
@@ -77,8 +85,9 @@ failing JSON Pointer paths are shown, which is why ARD 0003 validates before dec
 ### 3. The store may transiently hold a schema-invalid document, and that is a stated property
 
 This is the consequence that makes the decision real rather than a convenience. `characters.document` is
-not guaranteed schema-valid at rest. It is guaranteed to be JSON, and ARD 0002's `STRICT` table plus
-`json_valid` say so, but nothing stronger.
+not guaranteed schema-valid at rest. It is guaranteed to be JSON — the shipped migration's
+`CHECK (json_valid(data))` on a `STRICT` table says so, and `character.NewCharacter` additionally
+requires a JSON *object* — but nothing stronger.
 
 Everything reading the store must therefore be written for that: `open` has the banner-and-read-only
 path, `validate` exists precisely to report it, and `show` renders what it finds. A component that
@@ -105,8 +114,8 @@ Resolved database path, a dirty indicator (`●` unsaved, `✓` saved with a rel
 
 ### 6. Conflict detection exists; conflict resolution does not
 
-Zero rows affected on ARD 0002's revision predicate raises a banner and the write is not lost from
-memory. v1 assumes one intended writer per character and offers no merge, no reload prompt, and no
+`common.ErrConflict` from the port — the aggregate's compare-and-set finding the stored revision has
+moved on — raises a banner, and the write is not lost from memory. v1 assumes one intended writer per character and offers no merge, no reload prompt, and no
 reapply — ARD 0001's modal is superseded rather than reimplemented.
 
 Detection without resolution is worth having anyway: it is the difference between a lost write and a
