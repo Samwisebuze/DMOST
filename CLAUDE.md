@@ -60,12 +60,6 @@ Two gotchas:
 
 ### gopls
 
-Installed, but at `$(go env GOPATH)/bin/gopls`, which is **not on `PATH`** — anything shelling out to it fails with `ENOENT` until that's fixed:
-
-```bash
-export PATH="$PATH:$(go env GOPATH)/bin"
-```
-
 Reach for it where `go doc` can't help — references, and outlines that include unexported declarations:
 
 ```bash
@@ -152,4 +146,7 @@ cmd/dmostd  →  pkg/http  →  pkg/app  →  pkg/domain  ←  internal/infra/in
 
 - Commits follow Conventional Commits (`feat(cmd/dmostd): ...`, `chore: ...`).
 - `/cmd` = executables, `/pkg` = reusable libraries, `/internal` = repo-private code (test helpers, pre-release DTOs), `/public` = web applications (currently empty).
-- Adding a wire-format change means a *new* `v1alpha`-style package, not edits to shipped DTOs.
+- Adding non-breaking wire-format change means *edit* `v1alpha`-style package.
+- Breaking wire-format change means a *new* `v1alpha`-style package. Do not mare breaking edits to existing DTOs.
+- When drafting docs(adr,psd), version by commit so revision history is reviewable. v0 for initial draft, vN+1 for revisions after. 
+- If a docs revision is minor, ie makes no decision or prose editing only, a patch version can be authored eg. v4.1 
