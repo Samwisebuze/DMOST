@@ -1,0 +1,127 @@
+---
+id: ARD-0006
+title: Undo is in-session; history is snapshots that write forward
+updated: 2026-08-18
+status:
+  - kind: proposed
+  - version: v0
+related:
+  - docs/psd/0001_character-management-tui.md
+  - docs/adr/0002-character-document-store.md
+  - docs/adr/0004-play-log-schema-change.md
+---
+
+# ARD 0006 — Undo is in-session; history is snapshots that write forward
+
+## Status
+
+**Proposed.** Depends on ARD 0002, which puts the character and its item instances in one conflict
+domain under one revision — the property that makes restore expressible as a single transaction.
+
+**Revisions.** v0 — initial draft.
+
+## Context
+
+PSD-0001 v0.1 kept each character in a JSON file, and leaned on that for durability: the character
+survives the tool being wrong about something, because you can open it in an editor. Moving to a row in
+a database weakens that, and ARD 0002 takes the move anyway.
+
+Two things have to answer for it. Ordinary mis-edits need to be reversible while the user is still
+sitting there, and a sheet needs a past that outlives the session — the thing a directory of JSON files
+never had unless the user thought to put it in git.
+
+There is an existing structure that looks like it should serve: `build_log`. It does not. Only two
+surfaces write it (the creation wizard and the level-up wizard, per §8.3), the §7.5 escape hatch
+deliberately writes nothing, and a log mixing "this was a level-up decision" with "I fixed a typo"
+would be worse than one recording only the former. So the build log is **not a replayable event log**,
+and nothing may be built on the assumption that it is.
+
+## Decision
+
+**Two independent mechanisms, neither built on `build_log`: a bounded in-session undo stack of whole
+documents, and a `character_revisions` table written inside the save transaction, restored by writing
+forward.**
+
+### 1. In-session undo stores whole documents, not inverse operations
+
+A bounded stack — 50 frames — of complete document states, pushed by the parent model on every
+mutation, with `u` to undo and `Ctrl+R` to redo. Discarded on exit. Disabled in read-only mode.
+
+Whole documents rather than inverse operations because a character document is a few tens of kilobytes
+while the mutation set is broad and still growing: nine section screens' worth of typed messages, each
+of which would need an inverse written and tested. Fifty copies of the document is cheaper than fifty
+inverses, and it cannot be subtly wrong.
+
+Undo restores derived values along with everything else; it does not restore inputs and then recompute
+(ARD 0005). Recomputing from a half-restored state is the specific bug PSD-0001 §10 calls out for its
+own test.
+
+`u` rather than `Ctrl+Z`, because `Ctrl+Z` is `SIGTSTP`: capturing it means disabling the tty's suspend
+character and breaking job control for users who expect it.
+
+### 2. Snapshots are written by validated saves, in the same transaction
+
+Every validated save inserts a `character_revisions` row inside the transaction that carries the
+`UPDATE`. Debounced autosaves do not snapshot — they fire every few seconds and would swamp the table
+(ARD 0007 owns the autosave rule).
+
+Same transaction, not a follow-up write, because a snapshot that can be absent for a save that
+succeeded is not history, it is a suggestion.
+
+### 3. A snapshot captures the whole aggregate, assembled in SQL
+
+The obvious worry about ARD 0002's shared revision is that a snapshot needs every item instance while
+the editor has lazily loaded only the few the user opened. It does not, because the aggregation happens
+in the database:
+
+```sql
+INSERT INTO character_revisions (character_id, doc_revision, document, items, saved_at, summary)
+SELECT :id, :rev, :document,
+       (SELECT json_group_array(json(document)) FROM item_instances WHERE owner_character_id = :id),
+       :saved_at, :summary;
+```
+
+`json_group_array` collects the item documents without the editor ever holding them, so lazy loading
+(§7.9, §9.4) and complete snapshots compose rather than trade off. This is the subtlest thing in the
+design and the reason the aggregation is not done in Go.
+
+### 4. Restore writes forward, and replaces document and items atomically
+
+`restore --at <timestamp|revision>` deletes the character's current `item_instances` rows, reinserts
+them from the snapshot's `items` array, writes the snapshot's document, and advances `doc_revision` —
+all in one transaction.
+
+Writing forward rather than rewinding the counter is what makes restore itself undoable: the restored
+state is a new revision, the revision it came from is still there, and a restore made in error is
+answered by another restore. It also keeps the revision sequence monotonic, which ARD 0002's
+optimistic-concurrency predicate depends on.
+
+There is no partial-restore state and no restore-induced dangling reference: items added after the
+snapshot disappear, items present at the snapshot come back, and the document's
+`inventory.entries[].item_instance_id` references resolve because both sides moved together.
+
+**`play_log` is the one exemption** — preserved rather than replaced, per ARD 0004 §5, because
+rewinding a sheet does not un-happen a session. Restore's confirmation names it.
+
+### 5. Pruning keeps the union, not the intersection
+
+On insert: keep the most recent 50 revisions per character, **and** keep anything under 30 days old.
+A character saved heavily in one session keeps that session's detail; one saved occasionally over a
+year keeps a year of history. At ~30 KB a document, 50 revisions is ~1.5 MB per character, and `purge`
+reclaims it.
+
+Union rather than intersection is the whole rule, and it is easy to implement backwards. The numbers
+are tunable defaults; the union is not.
+
+## Consequences
+
+- **The store is now the durability story, and it is a better one than files were.** `history` plus
+  `restore --at` is strictly more than a directory of JSON files had. ARD 0002's `export` envelope and
+  the readable `document` column cover the rest of what the file design offered.
+- **Restorable revisions are a sparse subset of the revision sequence**, because autosave advances
+  `doc_revision` without snapshotting. History will show gaps; they are honest.
+- **Snapshot storage grows with editing, not with time**, and the only reclamation is `purge`, which
+  is also the only path that deletes a character.
+- **Whether any of this is used is an open question with an instrument.** §12 question 5 counts
+  `restore` invocations and undo depth. If nobody restores across a campaign, pruning can be far more
+  aggressive and §7.13 collapses to one mode.
