@@ -4,7 +4,7 @@ title: Character Management TUI
 updated: 2026-08-18
 status: 
     - kind: draft
-    - version: v0.4.7
+    - version: v0.5
 component: 
     - type: CLI
     - name: dmosh
@@ -16,6 +16,8 @@ audience:
 related:
   - docs/jsonschema/character/v1alpha/classes.schema.json
   - docs/psd/share/2024-character-schema-report.md
+  - docs/adr/README.md
+  - docs/adr/0002-character-document-store.md
 ---
 
 # Product Specification: Character Management TUI
@@ -43,6 +45,8 @@ related:
 **v0.4.6** — adds §12, *What v1 is built to find out*, following the GM session tool spec's §11 convention: a local `usage_counters` table, a `dmosh character feedback` command, and eight user-facing questions this version exists to answer. Open questions move to §13.
 
 **v0.4.5** — **D20 amended:** item instances now share the character's `doc_revision` rather than carrying their own. Lazy loading is unchanged. Amended in place rather than issued a new number, since it is the same decision reversing one of its two halves within one review cycle; the reversal and its consequences are recorded in *Corrections and inferences* below. This closes §13's item-snapshot question outright — restore is now complete by construction.
+
+**v0.5** — alignment revision. Nine architecture records (ARD 0002–0009) were written against v0.4.7 and one of them, ARD 0002, reverses this document's implementation shape: there is no `internal/store`, because the existing `pkg/domain/character` → `pkg/app` → `internal/infra/sqlite` stack is extended to do this job instead. **The storage *behaviour* specified here is adopted essentially whole** — document-as-aggregate, optimistic concurrency, soft delete, snapshots, shared item revisioning — so this revision changes where the code lives and what it is called, not what it does (D22). It also folds back five findings the records turned up in the process (corrections 7–11), one of which — that the schema report this document cites is not in the repository — is a problem for more than this section.
 
 ### v0.3 decisions
 
@@ -95,6 +99,28 @@ related:
 |---|---|---|---|
 | D21 | Play log (schema prerequisite) | **Add `play_log` to `character.schema.json` as Phase 0 pre-work**, for PSD-0002's patch idempotency. Read/validated/round-tripped in v1; written by nothing. Exempt from `restore`. | §6.1, §10, §11 |
 
+### v0.5 decisions
+
+| # | Decision | Resolution | Sections |
+|---|---|---|---|
+| D22 | Implementation architecture | **Extend the existing stack; no `internal/store`.** The aggregate, port, services and SQLite adapter already in the repository grow to meet this spec, breaking their current shape where needed. See ARD 0002. | §5.1, §5.3, §9 |
+| D23 | Snapshot trigger | **Explicit save and session end**, not every navigation-away; an insert identical to the newest revision is skipped. Validation still runs on navigation-away. See ARD 0006. | §8.5, §8.6 |
+| D24 | Exit codes for usage and internal errors | **`sysexits` 64 and 70**, so cobra's usage errors stop colliding with "schema-invalid"; `--all` reports the worst outcome **by severity**, not the numeric maximum. See ARD 0008. | §4 |
+| D25 | Phase 0 scope | **Widened** beyond `play_log`: `additionalProperties: false` throughout the schema, and the attunement default that the generated types inject on decode. One format change, not three. See ARD 0003, ARD 0004. | §6.1, §11 |
+
+The architecture records now carry the cross-cutting decisions that span packages or reverse an earlier record; this document stays the product specification. Where they disagree with a section here, v0.5 has already brought that section into line, and the record is the place the reasoning lives:
+
+| record | what it decides | sections here |
+|---|---|---|
+| ARD 0002 | the stack alignment (D22) | §5.1, §5.3, §9.1–§9.4 |
+| ARD 0003 | generated types as the in-memory document, validate-before-decode | §5.3, §6 |
+| ARD 0004 | `play_log`, and that it is server-owned at the wire boundary | §6.1 |
+| ARD 0005 | the no-rules-tables boundary, evaluation order, override propagation | §8.1 |
+| ARD 0006 | undo, snapshots, restore (D23) | §8.6 |
+| ARD 0007 | unvalidated autosave, and the decodable-always invariant | §8.5, §6 |
+| ARD 0008 | the CLI shape and ambient resolution (D24) | §4 |
+| ARD 0009 | the four test layers, and the missing fixture | §10 |
+
 ### Corrections and inferences
 
 Six of these decisions had consequences that required changes beyond the sections they nominally touch. Recording them explicitly because each is a place where a reader of an earlier draft would otherwise be misled:
@@ -106,13 +132,21 @@ Six of these decisions had consequences that required changes beyond the section
 5. **D20's revisioning half was reversed, and that exposed an `export` gap.** v0.4.4 specified independent per-item revisions; v0.4.5 reverses that to a shared revision so restore is a clean transition. Two knock-ons were not asked about. First, snapshots must now capture the item set, which meant an `items` column on `character_revisions` and an aggregation done in SQL (`json_group_array`) so that capturing every item does not force the editor to abandon lazy loading — that combination is the subtlest thing in this decision and §9.4 shows the statement. Second, treating character-plus-items as one aggregate makes it indefensible for `export --format json` to emit only the character document: §9.3 claims export is the backup-and-handoff story, and an export that silently dropped every magic item would make that claim false. Export is now a `{character, items[]}` envelope. The `doc_revision` column added to `item_instances` in v0.4.4 has been removed again.
 6. **D21 carries two judgements PSD-0002 did not make.** That spec names "the character log" and its entry shape but not the field name or its interaction with anything here. I chose `play_log` over `character_log` for the opposition with `build_log` (§6.1), and — more consequentially — **exempted it from `restore`**. Without that exemption, rewinding to a revision predating a patch would erase the record of applying it and let the next `patch apply` re-award the same XP, which is precisely the failure PSD-0002's idempotency design exists to prevent. It is the only field with such an exemption, and it makes D20's "restore is a clean transition" true of sheet state rather than of literally every byte. Both are flaggable.
 
+**v0.5 adds five more. All of them were found by writing the architecture records against the code rather than by re-reading this document, which is the argument for having written them:**
+
+7. **The schema report this document cites does not exist.** §5.3, §7.8, §7.10, §9.4 and §10 all cite "the schema report", and `related:` names `docs/psd/share/2024-character-schema-report.md`. That file is a copy of PSD-0002, front matter and all; its own front matter points at `dnd-2024-character-schema-report.md`, which this repository has never contained. The consequence that bites hardest is §10's: the "Vesk Ambermarch" worked example the derive tests are built on is not available to anyone implementing this, so the fixture has to be authored (ARD 0009 §7). The citations are left in place rather than deleted, because the reasoning they support is still the reasoning — but they resolve to the wrong document today and someone should fix that at the source.
+8. **`play_log` has to be unpatchable over HTTP.** §6.1 protects the log from `restore` and stops there, because this spec only considers the local store. The daemon already serves `PATCH` over the same document, and a new root property is patchable by default — so `{"play_log": []}` would empty the idempotency record and let the next `patch apply` re-award everything. It joins `serverOwnedSheetKeys` (ARD 0004 §6).
+9. **§5.3's load order was backwards.** It said decode-then-validate-then-hydrate. The generated types reject bad input with Go type errors naming a Go type, and only the compiled JSON Schema produces the JSON Pointer paths §6 promises, so validation has to run first (ARD 0003 §2).
+10. **Unvalidated autosave needs a second, narrower invariant.** §8.5 lets the store hold a schema-invalid document, which is right; composed with the load path it also lets the tool write a document it cannot reopen, since the generated types refuse out-of-range numbers and unknown enum members on decode. So the rule is *decodable always, valid at the gates* — enforced by field-level input constraints in the editor — plus a recovery path on `open` (ARD 0007 §7).
+11. **§13.2 was missing.** §9.1 and D14 both cite it for homebrew sharing; §13 said "two remain" and listed one. Restored below.
+
 Through v0.4.6 the document format itself was unchanged across every revision. **v0.4.7 ends that**, additively and deliberately: `play_log` (§6.1) is the one field this spec adds, it is required by PSD-0002 rather than by anything here, and it is scheduled as Phase 0 precisely so the change happens once, before any code depends on the old shape. `character.schema.json` remains the source of truth for what a character *is*.
 
 ---
 
 ## 1. Purpose and scope
 
-This is the first interface shipped for the Dungeon Master Open Source Toolkit: a terminal UI, invoked from a Cobra-based CLI, that lets a single player create, view, and edit one D&D 2024 character to full paper-character-sheet fidelity. It reads and writes documents conforming to `character.schema.json`. It has no network layer of its own; storage is a local SQLite database. The schema already carries the fields a future sync/server tool will need (`owner_user_id`, `campaign_id`, `doc_revision`), and this spec treats those as inert metadata — present in the database, not exposed as an editable screen — so this tool does not have to be rewritten when the server arrives.
+This is the first interface shipped for the Dungeon Master Open Source Toolkit: a terminal UI, invoked from a Cobra-based CLI, that lets a single player create, view, and edit one D&D 2024 character to full paper-character-sheet fidelity. It reads and writes documents conforming to `character.schema.json`. It has no network layer of its own; storage is a local SQLite database. The schema already carries the fields a future sync/server tool will need (`owner_user_id`, `campaign_id`, `doc_revision`), and this spec treats those as metadata rather than content — none of them is an editable screen — so this tool does not have to be rewritten when the server arrives. Two of the three are genuinely inert in v1; `doc_revision` is not, since it is written from the aggregate's version on the way out (§5.3).
 
 **In scope for v1:** everything a player would track on a physical 2024 character sheet plus its scratch space — identity, ability scores and saves, skills, proficiencies and languages, combat stats (AC, initiative, speed, HP, hit dice, death saves), conditions, feats and features, class/subclass and weapon mastery, resources (class pools like Rage or Ki), rest state, spellcasting (all four block types from the schema report: class-prepared, always-prepared, granted/innate, spellbook), inventory and equipped state, currency, and freeform notes/backstory.
 
@@ -199,6 +233,12 @@ Every command that resolved its target from the environment rather than an argum
 | 0 | Schema-valid, and stored derived fields match a fresh `Recompute` |
 | 1 | Schema-invalid — JSON Pointer paths printed to stderr |
 | 2 | Schema-valid but derived fields have drifted — diff printed; `recompute` fixes it |
+| 64 | Usage error — unknown flag, missing or unresolvable argument, ambiguous name |
+| 70 | Internal error — the store could not be opened, a migration failed |
+
+**64 and 70 are the `sysexits.h` values for `EX_USAGE` and `EX_SOFTWARE` (D24),** borrowed rather than invented. They exist because cobra exits 1 by default on a usage error, which would make 1 mean both "this document is invalid" and "you typed the command wrong" — and 1 is the code a script is most likely to branch on. The root command overrides cobra's default so that never happens.
+
+**`validate --all` reports the worst outcome by severity, which is not the numeric maximum:** invalid outranks drifted, so it exits 1 if any document is invalid, else 2 if any has drifted, else 0. The obvious max-of-codes implementation would report a store containing one unparseable sheet and forty drifted ones as merely drifted.
 
 `import` is the explicit, validated on-ramp for an externally-produced document (a hand-edited fixture, another tool's export, a file recovered from a v0.1-era install). `--template FILE` on `new` takes the same format, used to prefill the wizard — which is how a table shares a house-standard starting sheet.
 
@@ -213,7 +253,7 @@ type model struct {
     doc        *character.Document // in-memory decoded schema document
     docID      string              // matches document._id / the characters.id row key
     dirty      bool
-    revision   int  // doc_revision as of last successful save; the UPDATE predicate (§5.3)
+    version    uint64 // the aggregate's version as of last successful save (§5.3)
     readOnly   bool // failed validation on open, or ruleset != 2024 (D5)
     undo       *undoStack // in-session undo/redo (§8.6)
     screen     screenID
@@ -234,15 +274,35 @@ Navigation is a stack, not a single enum, so `Esc` always returns to the prior s
 
 ### 5.3 Data layer
 
-`internal/character` holds Go types mirroring `character.schema.json` 1:1 — same field names in `snake_case` JSON tags, same optionality (a field typed `["string","null"]` is a pointer or nullable wrapper, never a bare string defaulting to `""`, because the schema report is explicit that missing vs. empty vs. zero are meaningfully different states). Generation is covered in §6.
+Go types mirroring `character.schema.json` 1:1 — same field names in `snake_case` JSON tags, same optionality (a field typed `["string","null"]` is a pointer or nullable wrapper, never a bare string defaulting to `""`, because missing vs. empty vs. zero are meaningfully different states) — are **generated once, at `internal/dto/v1alpha/character`**, which is where the repository already generates them. `internal/character` holds the behaviour around that tree: loading, the compiled-schema validator, the hand-written exceptions, and `derive` (§8.1). It does not re-declare the types; a second tree generated from the same schema is the drift the codegen exists to prevent. Generation is covered in §6.
 
-`internal/store` wraps `database/sql` and owns all persistence; no other package issues SQL. Loading is `SELECT document FROM characters WHERE id = ? AND deleted_at IS NULL` then decode-then-validate-then-hydrate. Saving is dehydrate-then-write: `UPDATE characters SET document = ?, doc_revision = doc_revision + 1, updated_at = ? WHERE id = ? AND doc_revision = ?` inside a transaction that also inserts a snapshot row (§8.6) when the save is a validated one. The trailing `doc_revision` predicate is an optimistic-concurrency check (§8.5); zero rows affected is surfaced, never silently overwritten. Item-instance writes join that same transaction and are guarded by that same predicate rather than carrying one of their own (D20, §9.4), so the character row is the single conflict domain for the whole aggregate.
+**Persistence is the existing stack, extended — there is no `internal/store` (D22).** The layers, outward from the document:
+
+| layer | what it owns here |
+|---|---|
+| `pkg/domain/character` | the aggregate — an identity, an opaque sheet, a version — plus `ItemInstance` and the `CharacterRepository` port |
+| `pkg/app` | the use cases, taking version-neutral command structs rather than wire types |
+| `internal/infra/sqlite` | the only place SQL is written; the adapter behind the port |
+| `internal/dto/v1alpha/mapper` | the wire boundary, mapping v1alpha requests into those commands |
+
+**Loading** is `CharacterService.Find`, which returns the aggregate with its sheet as stored and its item set *unloaded* — a third state distinct from "loaded and empty", because §7.9 fetches an item on first selection. The TUI then validates against the compiled schema and only then decodes into the generated tree (correction 9); a decode failure after a clean validation is a bug in the type tree, not a bad document.
+
+**Saving** is one of two use cases, differing in kind rather than in a flag (§8.5):
+
+- `SaveCharacterDraft` — the debounced autosave. No schema gate, no snapshot.
+- `ReplaceCharacter` — `Ctrl+S`, session end, `import`, wizard completion. Full validation, and a snapshot in the same transaction (§8.6).
+
+**Concurrency control is the aggregate's compare-and-set**, which the port already implements: `Save` succeeds only if the stored character is still at the version the caller loaded, and returns `common.ErrConflict` otherwise. That is the same optimistic-concurrency check earlier revisions expressed as a trailing `doc_revision` predicate, under the name the code already uses — and `common.ErrConflict` deliberately does not wrap `ErrInvalid`, because losing a race is not a malformed request.
+
+**Item writes ride the same save.** Items are part of the aggregate (D20, §9.4), so they are written in the transaction that writes the character and are covered by the same version, rather than carrying one of their own. A save whose items were never loaded leaves the stored items untouched; a save whose items were loaded replaces them.
 
 ## 6. Schema fidelity and validation
 
 `character.schema.json` is the source of truth for the storage format and the TUI must not fork it.
 
 **Vendoring.** The schema is vendored at `internal/character/schema/character.schema.json`, kept byte-identical to the project doc by a `go generate` check, and compiled once at startup via `jsonschema.Compile`.
+
+**The compiled schema is the gate, and it runs before the decode.** It replaces `mapper.validateSheet`, which decoded into the generated type purely to enforce required fields and enums and then discarded the result. That ordering is not a preference: the generated types reject bad input with Go type errors naming a Go type, while only the compiled schema produces the JSON Pointer paths this section promises and the banner below renders (correction 9). The change reaches the wire — `problem+json`'s `reason` for an invalid sheet becomes a list of pointers rather than a Go error string.
 
 **Struct generation (D9).** `omissis/go-jsonschema` generates the bulk of the type tree at build time via `go generate`, so a schema change that removes or renames a field becomes a compile error rather than silent data loss. Two schema constructs are beyond it and are hand-written in a clearly-marked `types_manual.go`, excluded from regeneration:
 
@@ -254,6 +314,8 @@ A CI job asserts the generated output is current (regenerate, `git diff --exit-c
 **Where validation runs (D6):** on `open`, on `import`, on wizard completion, on explicit save (`Ctrl+S`), on navigation away from the editor, and on `export`. It does **not** run on debounced autosave — mid-edit documents are routinely incomplete, and blocking autosave on them would lose work exactly when the user is typing most.
 
 **Failure handling.** A validation failure on *open* shows a non-fatal banner with the failing JSON Pointer paths and opens the row read-only until acknowledged. A failure on an *explicit save* blocks that write and surfaces the same detail; the document stays in memory to be fixed.
+
+**A document that will not decode is a different failure, and needs its own path.** Because autosave does not validate (§8.5), the store can hold a document the generated types refuse — an out-of-range number, an enum member from nowhere — and there is then no in-memory document for a banner to attach to. Two rules follow, and together they are the invariant *decodable always, valid at the gates* (correction 10). Field-level input constraints in the editor keep a value the types cannot decode from being entered in the first place, which is the same inline refusal the hand-written exceptions provide, applied as a general rule. And `open` falls back to a recovery path that names the offending field, offers the newest snapshot (§8.6) as a restore target, and offers the raw JSON for export — read-only until acknowledged, then editable, because the user must be able to repair a document this tool wrote.
 
 **Ruleset gate (D5).** A document whose `ruleset.revision` is not `"2024"` opens read-only with an explanatory banner. It can still be viewed, exported, and validated. The creation wizard always writes `"2024"`.
 
@@ -319,6 +381,12 @@ Two details in that fragment are load-bearing rather than incidental:
 - **`kind` at entry level *is* an enum,** because these are the character tool's own entry types, not a foreign vocabulary. `patch_applied` is the only one PSD-0002 needs. `award` and `note` are reserved for the native uses that spec anticipates — quest rewards, XP, permanent buffs recorded by the player directly — and nothing in v1 writes them.
 
 **Version impact.** This is additive and `play_log` is optional, so every existing document stays valid. `schema_version` goes `1.0.0` → `1.1.0`; §6's mismatch banner will fire once for documents written before the bump, which is the intended behaviour, not a defect.
+
+Nothing enforces `schema_version` beyond its pattern — no Go code reads it — so the bump is advisory, and the rule that falls out is worth stating: a document is always validated against the single vendored current schema, so **every later change to this schema within `v1alpha` must be additive and optional**. A change that cannot be is the change that forces a new DTO package.
+
+**`play_log` is server-owned at the wire boundary.** A root property is patchable by default, so once this lands an HTTP client could send `{"play_log": []}` and empty the record of every patch ever applied — the same double-award the restore exemption below exists to prevent, arriving through a door that exemption does not cover. It joins `serverOwnedSheetKeys` alongside `_id`, `doc_revision` and the rest (correction 8). Whether a networked GM tool ever gets a write path to the log is a question for whenever PSD-0002 grows one; a merge patch will not be it, since a merge patch replaces an array wholesale and this one is append-only.
+
+**Phase 0 carries two more schema changes with it (D25).** Both were found by auditing the generated types against the schema, both are silent-loss bugs rather than features, and both want the same single format bump rather than three: `additionalProperties: false` throughout — it appears three times across fourteen files today, so a schema-legal extra key inside `combat` or `inventory.entries[]` is dropped or kept depending only on whether the generator emitted a struct or a map — and the attunement default, where `combat.attunement.slots_maximum` is injected as 3 on decode into a field tagged `omitzero`, so opening a sheet that omitted it and letting autosave fire writes it in with no user edit. §11 sequences them.
 
 **What v1 actually does with it: reads, never writes.** No screen in this spec appends a play-log entry. The tool must generate types for it, validate it, round-trip it without loss, include it in snapshots and in `export`'s envelope, and render nothing. That is the honest scope — this is groundwork for PSD-0002, and pretending otherwise would invite someone to build a UI for an always-empty array. When it does get a surface, the likely home is a third mode on §7.13, which D19 deliberately left unstructured.
 
@@ -422,7 +490,7 @@ A sequential `huh.Form` group: name → ability generation method → ability sc
 
 Species, background, and class steps are free-text in all phases (D13); the equipment step gains a catalog picker in Phase 2b. Cross-field validation the schema can't express — principally the background allocation pattern — lives here, per §7.3.
 
-Completing the wizard produces a schema-valid document with `doc_revision: 0` and an initial `build_log` containing `species_selected`, `background_selected`, and `class_selected`, then hands off into the editor (§7.1).
+Completing the wizard produces a schema-valid document with an initial `build_log` containing `species_selected`, `background_selected`, and `class_selected`, then hands off into the editor (§7.1). Its `doc_revision` is not the wizard's to choose: like `_id`, `created_at` and `updated_at`, it is written from the aggregate at save time (§5.3), and the first stored revision is version 1.
 
 ### 7.12 Level-up wizard (Phase 2a) (D3)
 
@@ -510,7 +578,7 @@ The document saves on a 2s debounce after the last mutation, and always on clean
 
 The status line shows the resolved database path, a dirty indicator (`●` unsaved / `✓` saved with relative timestamp), and a `⚠` when the in-memory document is currently failing validation — so save-time rejection is never a surprise.
 
-Each save is the UPDATE-with-revision-predicate from §5.3; `doc_revision` increments on every success. v1 assumes one intended writer per character, but the conflict-detection mechanism exists as a side effect of using the database correctly. Zero rows affected surfaces a conflict banner rather than losing the write; resolving such a conflict is out of scope for v1.
+Each save goes through §5.3's two use cases — `SaveCharacterDraft` for the debounce, `ReplaceCharacter` for the gated writes — and the aggregate's version advances on every success. v1 assumes one intended writer per character, but the conflict-detection mechanism exists as a side effect of using the aggregate correctly: `common.ErrConflict` from the port surfaces a conflict banner rather than losing the write. Resolving such a conflict is out of scope for v1, and note that the reapply-against-a-newer-sheet option a merge-patch write would have allowed is not available here, because the editor writes whole documents.
 
 ### 8.6 Undo and snapshots (D17)
 
@@ -518,9 +586,17 @@ Two independent mechanisms, deliberately not built on `build_log` (§8.3).
 
 **In-session undo.** A bounded stack of whole-document states, pushed by the parent model on every mutation (§5.1), with `u` to undo and `Ctrl+R` to redo. Bounded by count (50 frames) and discarded on exit — this is "I mistyped that", not history. Whole-document snapshots are used rather than inverse operations because a character document is a few tens of kilobytes and the mutation set is broad; storing 50 copies is cheaper than writing and testing an inverse for every message type. Undo is disabled in read-only mode.
 
-**Persisted snapshots.** Every *validated* save (`Ctrl+S`, navigation-away) inserts a row into `character_revisions` in the same transaction as the `UPDATE`. Debounced autosaves do not snapshot — they fire every few seconds and would swamp the table. Surfaced as `dmosh character history` (listing revision, timestamp, and a one-line summary of what changed) and `dmosh character restore --at <timestamp|revision>`, which writes the old document back as a *new* revision rather than rewinding the counter, so restoring is itself undoable.
+**Persisted snapshots.** A save that passes `WithSnapshot(summary)` to the repository inserts a `character_revisions` row inside the transaction that carries the write. Debounced autosaves do not snapshot — they fire every few seconds and would swamp the table.
+
+**The trigger is explicit save and session end, not every validated save (D23).** Validation still runs on navigation-away (§6), but a snapshot does not: leaving a section screen happens dozens of times in an evening, and snapshotting each one would churn the most-recent-50 window inside a single session and make the pruning claim below false for anyone who actually uses the tool. An insert whose document is byte-identical to the newest existing revision is skipped. What is left is a revision that means something a user recognises — "I decided this was a good state", or "I finished a session" — rather than "I pressed Escape".
+
+Surfaced as `dmosh character history` (listing revision, timestamp, and a one-line summary of what changed) and `dmosh character restore --at <timestamp|revision>`, which writes the old document back as a *new* revision rather than rewinding the counter, so restoring is itself undoable. A revision written by a restore records which revision it came from, so History can say `r42  restored from r39` instead of showing two identical documents with no relationship between them.
+
+**The summary line comes from the mutations, not from a diff.** The parent model (§5.1) is the only component that sees every mutation and the only one that knows intent: a diff can see `slots_used` go from 1 to 2, but not that the user cast a spell, and every summary in §7.13 is a statement of intent. It is composed from the typed messages accumulated since the last snapshot.
 
 **Snapshots cover the whole aggregate (D20).** Because a character and its items share one revision, each snapshot row captures the character document *and* the full set of item instances at that revision, assembled in SQL so lazy loading is unaffected (§9.4). Restore replaces both in a single transaction, so moving to a prior revision is a clean transition rather than a partial one.
+
+**Restore is composed in `pkg/app`, not issued by the store.** It reads the revision, splices the *current* `play_log` back into the snapshot's document per §6.1, and saves the result with the snapshot's item set — one write, which advances the version and replaces the stored items atomically. It is composed rather than a port method precisely because of that splice: preserving one named field is knowledge of what is inside the sheet, and that belongs above the storage adapter.
 
 **Pruning,** applied on insert: keep the most recent 50 revisions per character, and additionally keep anything under 30 days old. A character saved heavily in one session keeps that session's detail; one saved occasionally over a year keeps a year of history. At ~30 KB per document, 50 revisions is ~1.5 MB per character — acceptable, and `purge` reclaims it. The specific numbers are tunable defaults, not load-bearing.
 
@@ -528,95 +604,119 @@ Two independent mechanisms, deliberately not built on `build_log` (§8.3).
 
 ### 9.1 Schema
 
+The table `characters` **already exists** — `internal/infra/sqlite/migrations/000001` creates it, and it is already the right shape for a document store: an identity, an opaque sheet, a creation instant, and a version. It is not edited. Everything this spec needs arrives as new numbered migrations (D22).
+
 ```sql
+-- Shipped, unchanged. STRICT is load-bearing: without it SQLite stores whatever
+-- it is handed regardless of declared type, and database/sql sends a Go []byte
+-- as a BLOB that TEXT affinity will not convert -- so a Save binding the sheet
+-- as bytes would store a blob silently, and every json_extract below would then
+-- be reading JSONB.
 CREATE TABLE characters (
-    id             TEXT PRIMARY KEY,       -- matches document._id
-    document       TEXT NOT NULL,          -- full character.schema.json document, as JSON text
-    schema_version TEXT NOT NULL,
-    doc_revision   INTEGER NOT NULL DEFAULT 0,
-    created_at     TEXT NOT NULL,
-    updated_at     TEXT NOT NULL,
-    deleted_at     TEXT,                   -- soft delete (D8); NULL = live
-    -- generated columns lift the fields `list` needs out of the document so it can be
-    -- queried and sorted in SQL without deserializing every row's JSON in Go:
-    character_name TEXT    GENERATED ALWAYS AS (json_extract(document, '$.identity.character_name')) STORED,
-    total_level    INTEGER GENERATED ALWAYS AS (json_extract(document, '$.progression.total_character_level')) STORED,
-    ruleset_rev    TEXT    GENERATED ALWAYS AS (json_extract(document, '$.ruleset.revision')) STORED,
-    campaign_id    TEXT    GENERATED ALWAYS AS (json_extract(document, '$.campaign_id')) STORED
-);
+    id         TEXT    NOT NULL PRIMARY KEY,   -- matches document._id
+    data       TEXT    NOT NULL CHECK (json_valid(data)),
+    created_at TEXT    NOT NULL,
+    version    INTEGER NOT NULL CHECK (version > 0)
+) STRICT;
+
+-- Added by this spec.
+ALTER TABLE characters ADD COLUMN updated_at TEXT;
+ALTER TABLE characters ADD COLUMN deleted_at TEXT;   -- soft delete (D8); NULL = live
+
+-- Generated columns lift the fields `list` needs out of the sheet so it can be
+-- queried and sorted in SQL without deserializing every row's JSON in Go (§2).
+--
+-- VIRTUAL, not STORED: SQLite's ALTER TABLE ADD COLUMN *cannot* add a STORED
+-- generated column, so STORED would mean a twelve-step table rebuild -- new
+-- table, copy, drop, rename -- to gain a value an index already holds. Virtual
+-- generated columns are indexable, and the index stores the extracted value, so
+-- ORDER BY character_name reads the index rather than re-extracting per row.
+ALTER TABLE characters ADD COLUMN character_name TEXT
+    GENERATED ALWAYS AS (json_extract(data, '$.identity.character_name')) VIRTUAL;
+ALTER TABLE characters ADD COLUMN total_level INTEGER
+    GENERATED ALWAYS AS (json_extract(data, '$.progression.total_character_level')) VIRTUAL;
+ALTER TABLE characters ADD COLUMN ruleset_rev TEXT
+    GENERATED ALWAYS AS (json_extract(data, '$.ruleset.revision')) VIRTUAL;
+ALTER TABLE characters ADD COLUMN campaign_id TEXT
+    GENERATED ALWAYS AS (json_extract(data, '$.campaign_id')) VIRTUAL;
 CREATE INDEX idx_characters_name ON characters(character_name) WHERE deleted_at IS NULL;
 
--- Snapshot history (D17, §8.6)
+-- Snapshot history (D17, §8.6). `version` is the aggregate's, not a counter of
+-- its own -- the character row is the single conflict domain for the aggregate.
 CREATE TABLE character_revisions (
-    character_id  TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
-    doc_revision  INTEGER NOT NULL,
-    document      TEXT NOT NULL,
-    items         TEXT NOT NULL DEFAULT '[]',  -- D20: item_instances documents at this revision,
-                                               -- as a JSON array. Snapshots capture the whole
-                                               -- aggregate so restore is atomic (§9.4).
-    saved_at      TEXT NOT NULL,
-    summary       TEXT,                    -- one-line description of what changed
-    PRIMARY KEY (character_id, doc_revision)
-);
+    character_id  TEXT    NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+    version       INTEGER NOT NULL,
+    data          TEXT    NOT NULL,
+    items         TEXT    NOT NULL DEFAULT '[]',  -- D20: item_instances documents at this
+                                                  -- revision, as a JSON array, so restore
+                                                  -- is atomic (§9.4)
+    saved_at      TEXT    NOT NULL,
+    summary       TEXT,                    -- one-line description of what changed (§8.6)
+    restored_from INTEGER,                 -- set when `restore` wrote this revision
+    PRIMARY KEY (character_id, version)
+) STRICT;
 
--- Phase 2a (D4, D20). No per-item revision: items share the owning character's doc_revision,
--- so the character row is the single conflict domain for the whole aggregate.
+-- Phase 2a (D4, D20). No per-item revision: items are part of the character
+-- aggregate and share its version.
 CREATE TABLE item_instances (
-    id                  TEXT PRIMARY KEY,
+    id                  TEXT NOT NULL PRIMARY KEY,
     owner_character_id  TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
-    document            TEXT NOT NULL,
+    data                TEXT NOT NULL CHECK (json_valid(data)),
     updated_at          TEXT NOT NULL
-);
+) STRICT;
 CREATE INDEX idx_items_owner ON item_instances(owner_character_id);
 
 -- Phase 2b (D13, D14). Holds SRD 5.2.1 seed content AND user homebrew.
 CREATE TABLE catalog_entries (
-    id           TEXT PRIMARY KEY,
-    entry_kind   TEXT NOT NULL,            -- 'spell' | 'item' | 'class_table'
-    name         TEXT NOT NULL,
-    document     TEXT NOT NULL,            -- the entry, shaped per its kind
+    id           TEXT    NOT NULL PRIMARY KEY,
+    entry_kind   TEXT    NOT NULL,         -- 'spell' | 'item' | 'class_table'
+    name         TEXT    NOT NULL,
+    data         TEXT    NOT NULL,         -- the entry, shaped per its kind
     is_homebrew  INTEGER NOT NULL DEFAULT 0,
     srd_licensed INTEGER NOT NULL DEFAULT 0,
     authored_by  TEXT,                     -- maps to source_ref.authored_by_user_id
-    created_at   TEXT NOT NULL
-);
+    created_at   TEXT    NOT NULL
+) STRICT;
 CREATE INDEX idx_catalog_kind_name ON catalog_entries(entry_kind, name);
 
--- Local feedback counters for §12. Deliberately NOT in the character document: that
--- document is the portable artifact (exported, patched, one day synced), and usage
--- data has no business travelling with it. Never leaves the machine.
+-- Local feedback counters for §12. Deliberately NOT in the character document:
+-- that document is the portable artifact (exported, patched, one day synced),
+-- and usage data has no business travelling with it. Never leaves the machine.
 CREATE TABLE usage_counters (
-    key         TEXT PRIMARY KEY,   -- e.g. 'screen_entry.spellcasting', 'restore.invoked',
-                                    -- 'field_edit.proficiency_bonus', 'width_bucket.compact'
+    key         TEXT    NOT NULL PRIMARY KEY,  -- e.g. 'screen_entry.spellcasting',
+                                               -- 'restore.invoked', 'width_bucket.compact'
     value       INTEGER NOT NULL DEFAULT 0,
-    updated_at  TEXT NOT NULL
-);
-
-CREATE TABLE schema_migrations (
-    version     INTEGER PRIMARY KEY,
-    applied_at  TEXT NOT NULL
-);
+    updated_at  TEXT    NOT NULL
+) STRICT;
 ```
 
-This keeps the schema report's document-database framing rather than fighting it: the `document` column *is* the aggregate root, and JSON1 functions project a few fields for indexing — never to decompose the document into a normalized relational shape. `dmosh character list` becomes `SELECT id, character_name, total_level, updated_at FROM characters WHERE deleted_at IS NULL ORDER BY character_name`, and the generated columns cannot drift because SQLite recomputes them on write.
+This keeps the document-database framing rather than fighting it: the `data` column *is* the aggregate root, and JSON1 functions project a few fields for indexing — never to decompose the document into a normalized relational shape. `dmosh character list` becomes `SELECT id, character_name, total_level, updated_at FROM characters WHERE deleted_at IS NULL ORDER BY character_name`, and the projections cannot drift, because SQLite computes them from the document rather than from anything a writer remembers to update.
 
-**Homebrew (D14).** `catalog_entries` holds seeded SRD content and user-created entries in one table, discriminated by `is_homebrew`. A "custom…" escape hatch in any picker writes a homebrew row, making that entry reusable by every character in the database instead of being retyped. There is no sharing or pack format yet (§13.2).
+**The projections are the one place the storage layer knows what is inside a sheet**, and the port returns them as a `CharacterSummary` — identity, version, timestamps, deleted state, name, and total level — rather than handing the picker whole aggregates to decode, which is what §2's startup budget forbids. Read-only, never a write path, two fields; widening it should require an argument.
 
-Migrations are numbered `.sql` files embedded via Go's `embed`, applied in order against `schema_migrations` at startup — independent of `character.schema.json`'s `schema_version`, which versions the document rather than the tables.
+**`play_log` (§6.1) has no column and no index.** v1 reads it, round-trips it, snapshots it, and exports it; nothing queries it.
+
+**Homebrew (D14).** `catalog_entries` holds seeded SRD content and user-created entries in one table, discriminated by `is_homebrew`. A "custom…" escape hatch in any picker writes a homebrew row, making that entry reusable by every character in the database instead of being retyped. There is no sharing or pack format yet (§13.2). It is the one table here that will want a real aggregate and port of its own, and that is a Phase 2b decision rather than this one.
+
+**`usage_counters` gets no domain port.** There is no aggregate to model — it is a counter map, local to `dmosh`, that never leaves the machine — so the composition root hands the TUI a small counter store from `internal/infra/sqlite` directly.
+
+Migrations are numbered `.sql` pairs embedded with `go:embed` and applied by `golang-migrate` against its own version table — the mechanism `internal/infra/sqlite` already uses, and independent of `character.schema.json`'s `schema_version`, which versions the document rather than the tables. Shipped migrations are never edited; a change is a new numbered pair.
 
 ### 9.2 Connection setup (D11)
 
-Three pragmas are set on every connection, in this order:
+Three settings apply to every connection, and they are folded into the **DSN** rather than issued as an `Exec` after `sql.Open` — which would configure one pooled connection and silently miss the rest. `internal/infra/sqlite` already works this way and already exposes them as fields; what this spec changes is the composition root's configuration, not the adapter.
 
 ```
-PRAGMA journal_mode = WAL;    -- readers never block on the TUI's writer
-PRAGMA busy_timeout = 5000;   -- retry rather than error on the rare writer collision
-PRAGMA foreign_keys = ON;     -- REQUIRED: off by default in SQLite
+journal_mode = WAL     -- readers never block on the TUI's writer
+busy_timeout = 5000    -- retry rather than error on the rare writer collision
+foreign_keys = ON      -- REQUIRED: off by default in SQLite
 ```
+
+The DSN itself is a file under `$XDG_DATA_HOME/dmosh/` (D10). The adapter's default is an in-memory database, which is right for tests and wrong for a tool whose whole purpose is keeping a sheet between sessions; the pool caps documented for that default — the reserved keepalive connection, the two-connection ceiling — are an in-memory concern and do not apply to a file-backed store, where `SQLITE_BUSY` is a real returned error the adapter already retries.
 
 WAL matters because D7 guarantees read commands never write, which makes `dmosh character show` against a database the TUI has open a legitimate workflow — a status bar, a stream overlay, a script watching HP. Without WAL those readers would intermittently hit `SQLITE_BUSY`.
 
-`foreign_keys = ON` is not optional decoration: SQLite ignores foreign key constraints by default, so without it the `ON DELETE CASCADE` clauses on `character_revisions` and `item_instances` silently do nothing and `purge` would orphan rows.
+`foreign_keys = ON` is not optional decoration, and §9.1 is where it stops being hygiene: SQLite ignores foreign key constraints by default, so without it the `ON DELETE CASCADE` clauses on `character_revisions` and `item_instances` silently do nothing and `purge` would orphan rows.
 
 **Two caveats to document in the README.** WAL creates `-wal` and `-shm` sidecar files beside the database, so backing up or moving a store means copying all three, or better, using `VACUUM INTO` / the SQLite backup API — a plain `cp` of just the `.db` while the TUI is running can capture a torn state. And WAL is unreliable on network filesystems (NFS, SMB); the tool should detect a non-local filesystem at startup where it can and warn, rather than letting a user discover corruption on a shared drive.
 
@@ -624,7 +724,7 @@ WAL matters because D7 guarantees read commands never write, which makes `dmosh 
 
 v0.1 leaned on "the character is a plain JSON file, so it survives the tool being wrong about something." Moving the row into a database weakens the `cat`-it-in-an-emergency property. Four things preserve or exceed it:
 
-- The `document` column holds unmodified JSON *text*, so `sqlite3 characters.db "SELECT document FROM characters WHERE character_name='…'"` still returns a readable document.
+- The `data` column holds unmodified JSON *text*, so `sqlite3 characters.db "SELECT data FROM characters WHERE character_name='…'"` still returns a readable document.
 - `dmosh character export --format json` is first-class, so backup, diffing, and handing a character to someone without this tool never require a SQLite client. **It bundles the item instances alongside the character document** — an envelope of `{character, items[]}` rather than the bare document — because D20 makes those one aggregate, and an "export" that dropped every magic item would make this durability claim false. `import` unpacks the same envelope, and accepts a bare character document too, which is the case that can produce the missing-item state in §7.9.
 - Deletion is soft (D8), so "I destroyed my character" is answered by `undelete` where the filesystem's answer was a trash can.
 - **Snapshots (D17) exceed what files gave.** A directory of JSON files had no history unless the user thought to put it in git. `dmosh character history` plus `restore --at` is strictly better than the thing it replaced.
@@ -637,20 +737,22 @@ Item instances live in their own table keyed by `owner_character_id`, matching t
 
 This works cleanly only because the schema report's redundancy policy already anticipated it. Everything the Inventory screen shows *without* a detail pane open comes from the character document alone: the tree renders from `item_name_cache`, the footer's carried weight sums the cached `weight_lb_total` per entry, and attunement usage counts `entries[].equipped.is_attuned`. No screen has to block on an item read to draw itself, so lazy loading costs a fetch on selection and nothing else. Had the schema normalized those caches away, this decision would have been forced the other way.
 
-**Shared revisioning (D20).** A character and its item instances are **one conflict domain and one revision**. `item_instances` rows carry no revision of their own; the character's `doc_revision` covers the whole aggregate. Editing an item marks the character dirty and its write goes in the same transaction, guarded by the same `doc_revision` predicate (§5.3). The point is §8.6: a snapshot that captures the aggregate makes restore a clean transition to a prior state rather than a partial one.
+**Shared revisioning (D20).** A character and its item instances are **one aggregate, one conflict domain, one revision** — stated in `pkg/domain/character` rather than implied by a transaction (D22). `item_instances` rows carry no revision of their own; the character's version covers all of it. Editing an item marks the character dirty and its write goes in the save that writes the character, under the same compare-and-set (§5.3). The point is §8.6: a snapshot that captures the aggregate makes restore a clean transition to a prior state rather than a partial one.
+
+The lazy/loaded distinction is part of the aggregate for the same reason: a save whose items were never loaded leaves the stored items alone, while a save whose items were loaded replaces them. That is a rule of the *port*, so it lives in `internal/test/repotest` where both the in-memory and SQLite adapters are held to it — and it is the subtlest thing in this design, since an aggregate whose save semantics depend on what was loaded will catch someone.
 
 **Lazy loading and shared revisioning compose without tension**, which is worth showing because it is not obvious. The worry would be that a snapshot needs every item while the editor has only lazily loaded a few. It doesn't — the snapshot is assembled in SQL, so items the editor never read are still captured:
 
 ```sql
-INSERT INTO character_revisions (character_id, doc_revision, document, items, saved_at, summary)
-SELECT :id, :rev, :document,
-       (SELECT json_group_array(json(document)) FROM item_instances WHERE owner_character_id = :id),
+INSERT INTO character_revisions (character_id, version, data, items, saved_at, summary)
+SELECT :id, :version, :data,
+       (SELECT json_group_array(json(data)) FROM item_instances WHERE owner_character_id = :id),
        :saved_at, :summary;
 ```
 
 `json_group_array` aggregates the item documents inside the database. The editor never has to hold the full inventory in memory, so lazy loading survives intact and snapshots are still complete.
 
-**Restore is atomic.** `restore --at` replaces the character document *and* the item set — delete the current `item_instances` rows for that character, reinsert from the snapshot's `items` array, write the document, bump the revision — in one transaction. The result is exactly the state at that revision, and because it writes forward as a new revision (§8.6) it stays undoable. There is no partial-restore caveat and no restore-induced dangling reference.
+**Restore is atomic.** `restore --at` replaces the character document *and* the item set — delete the current `item_instances` rows for that character, reinsert from the snapshot's `items` array, write the document, advance the version — in one transaction, driven by a single save from the use case that composed it (§8.6). The result is exactly the state at that revision, save for `play_log`, and because it writes forward as a new revision it stays undoable. There is no partial-restore caveat and no restore-induced dangling reference.
 
 **Dangling references are still possible, from a different direction.** `import` reads a standalone character document whose `inventory.entries[]` may reference `item_instance_id`s that do not exist in this database (see §9.3 on what `export` bundles). The tree still renders such an entry from its cached name and weight; the detail pane shows a "this item is missing" state offering to remove the orphaned entry. It must never be a crash or an empty pane.
 
@@ -658,11 +760,19 @@ SELECT :id, :rev, :document,
 
 Screen-level logic uses `charmbracelet/x/exp/teatest`, driving each screen's `Update` with scripted key sequences and asserting on rendered output. Layout tiers are tested by driving `tea.WindowSizeMsg` at 80, 120, and 160 columns and snapshotting each — which also catches the below-80 refusal path.
 
-The derive package (§8.1) is table-driven against the schema report's worked example ("Vesk Ambermarch") as a known-good fixture: computing modifiers, saves, skill totals, and weights from its inputs and asserting they match its stored outputs is both a derive test and a schema-fidelity regression test.
+The derive package (§8.1) is table-driven against a known-good fixture: computing modifiers, saves, skill totals, and weights from its inputs and asserting they match its stored outputs is both a derive test and a schema-fidelity regression test.
+
+**That fixture has to be authored — it does not exist (correction 7).** Earlier revisions named "Vesk Ambermarch" from the schema report, and the file this document cites as that report is a copy of PSD-0002. So the fixture is a hand-written, schema-valid 2024 character with hand-computed outputs, reviewed once as arithmetic and then trusted, living in `testdata/`; the multiclass and spellcasting round-trip cases below want the same one. `internal/test/testdata/character.v1alpha.json` is not a substitute — it is the daemon's minimum-viable valid sheet, with no derived outputs to check against. Writing it is the first task in Phase 1's testing work, not an assumed input.
+
+Two derive cases beyond the happy path, both easy to get backwards and neither visible when wrong: that `abilities.*.override_score` propagates to every downstream modifier, save, skill and spell DC while `combat.armor_class.override` is terminal; and that the single evaluation pass runs in dependency order, so a mutated ability score yields a fresh passive score rather than a stale one.
 
 **Because of D2, the derive tests also enforce the no-rules-tables boundary.** A test asserting `Recompute` leaves `proficiency_bonus` untouched at a level where the 2024 table would change it is the cheapest way to catch a well-meaning contributor adding a lookup. Equivalent guard tests cover carrying capacity and slot maxima.
 
-`internal/store` tests run against SQLite's `:memory:` mode — faster setup/teardown, no stray files — with a separate small suite against a temp file for the paths that are file-specific: WAL sidecar behaviour, the pragma set, and `VACUUM INTO`. Round-trip tests (load → mutate via the model → save → validate) run over fixtures seeded at setup, covering the structurally distinct cases: multiclass with two slot pools, a lineage-granted innate spell, a cursed attuned item, an Exhaustion-leveled condition, a `1_1_1` background allocation, a soft-deleted row, and a character with enough revisions to trigger pruning.
+Persistence tests live in `internal/infra/sqlite`, in-package as that package's tests already are, and run against both an in-memory DSN — faster setup and teardown, no stray files — and a temp file, because their locking behaviour genuinely differs; the file-backed suite is where WAL sidecar behaviour, the DSN settings, and `VACUUM INTO` are covered. **Every rule that is true of the *port* rather than of SQLite goes in `internal/test/repotest` instead**, so the in-memory and SQLite adapters cannot drift: enumeration and its ordering, soft delete and undelete, the cascade on purge, snapshot-on-save, and the lazy-items rule from §9.4.
+
+Round-trip tests (load → mutate via the model → save → validate) run over fixtures seeded at setup, covering the structurally distinct cases: multiclass with two slot pools, a lineage-granted innate spell, a cursed attuned item, an Exhaustion-leveled condition, a `1_1_1` background allocation, a soft-deleted row, and a character with enough revisions to trigger pruning.
+
+**They compare semantic JSON equality, not bytes.** Byte equality is unattainable by construction: Go's encoder sorts map keys, and the design re-encodes from a decoded tree, so key order and whitespace differ from the input on every document. Semantic comparison — decode both sides with `UseNumber` and compare — is also exactly the right sensitivity, since it tolerates ordering while still failing on a dropped nested key or an injected default, which are the two losses §6.1's Phase 0 changes exist to close.
 
 Specific behaviours that need their own tests because they are easy to get subtly wrong: the undo stack's bound and its interaction with `Recompute` (undoing must restore derived values, not recompute them from a half-restored state); snapshot pruning keeping the union of "most recent 50" and "under 30 days" rather than the intersection; `purge` cascading to both `character_revisions` and `item_instances`, which fails silently if the `foreign_keys` pragma regresses; and the three `validate` exit codes.
 
@@ -672,11 +782,15 @@ D20 needs four. That opening a character issues no reads against `item_instances
 
 D18's resolution needs its own small suite, since it is the one behaviour driven by ambient state a test can easily get wrong by accident: each rung of the precedence ladder in isolation, the ambiguous-name error, the soft-deleted-target error, and — most importantly — an assertion that every lifecycle command still fails without an explicit argument *while `DMOSH_CHARACTER` is set*. That last case is the regression that would quietly reintroduce the footgun the carve-out exists to prevent.
 
-`dmosh character validate --all` against a seeded fixture database is a CI gate, as is `go generate` cleanliness (§6).
+`dmosh character validate --all` against a seeded fixture database is a CI gate, as is `go generate` cleanliness (§6). The fixture database must be seeded by the test itself and never be a checked-in `.db` or a real store: §8.5 lets a store the TUI has been editing hold invalid documents, so pointed at one this gate would report a user's mid-edit sheet as a build failure.
 
 ## 11. Phased delivery
 
-**Phase 0 — schema prerequisite.** The `play_log` change to `character.schema.json` (§6.1), the `schema_version` bump to `1.1.0`, and regenerated types. No behaviour, no screens; it exists so that D9's codegen and the round-trip corpus are built against the final root shape rather than migrated to it later.
+**Phase 0 — schema prerequisite and stack alignment.** Two strands, both pre-work, both landing before Phase 1 begins.
+
+*The schema (D25).* The `play_log` addition (§6.1), `additionalProperties: false` throughout, the attunement default, the `schema_version` bump to `1.1.0`, and regenerated types. One format change rather than three, so that the codegen and the round-trip corpus are built against the final root shape rather than migrated to it later. `play_log` also joins `serverOwnedSheetKeys`, which touches `internal/dto/v1alpha/mapper` and its tests.
+
+*The stack (D22).* The aggregate grows an item set and an `ItemInstance` entity; the repository port grows from two methods to seven; `pkg/app` moves to version-neutral command structs and gains the two write use cases; validation moves to the compiled schema; the in-memory and SQLite adapters and `repotest` grow with the port; §9.1's migrations land. This breaks signatures across `pkg/domain/character`, `pkg/app`, `internal/dto/v1alpha/mapper`, `internal/infra`, `internal/test`, `pkg/http` and `cmd/dmostd` — cheaply, because nothing has shipped and no database has ever survived a process exit, and never as cheaply again. No behaviour and no screens come out of either strand.
 
 **Phase 1 — the numeric sheet.** Sheet Overview, Identity & Background, Abilities & Saves, Skills & Proficiencies, Combat & Vitals, Currency, the creation wizard, in-session undo and snapshots (§8.6), and the full non-interactive command set. Manual entry throughout; no catalog. Covers the numeric heart of a paper sheet and is independently useful.
 
@@ -719,4 +833,6 @@ The README carries the questions v1 is designed to answer:
 Two remain. Each is deferred by choice, with the reason stated.
 
 1. **Catalog coverage for species, backgrounds, feats, and features (follows D13).** These stay free-text through v1, and they are the largest remaining manual-entry burden (§7.2). Whether a later phase adds them is open; it's a bigger content problem than spells because the entries are more entangled with the wizards and with each other. Worth revisiting once Phase 2b shows how well the catalog pattern works for spells.
+
+2. **Sharing homebrew between tables (follows D14).** Restored in v0.5: §9.1 and D14 both promise this entry, and it had gone missing. `catalog_entries` makes a custom spell or item reusable by every character in one database, and stops there — there is no pack format, no export or import of catalog content, and no way to hand a table's house rules to another player. What that should look like depends on whether the answer is a file, the GM tool's exchange interface (PSD-0002 §6), or the sync layer that neither spec has yet, so it is deferred rather than guessed at.
 2. **Shareable homebrew packs (follows D14).** The local catalog makes homebrew reusable within one database but not transferable between people, which is in tension with the toolkit's collaborative goal. Deferred deliberately to the server work, where sharing semantics (who owns a pack, what happens on conflicting imports, how versions are pinned) will be forced decisions anyway rather than guesses.
