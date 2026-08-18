@@ -4,7 +4,7 @@ title: Character storage is a document store the TUI owns
 updated: 2026-08-18
 status:
   - kind: proposed
-  - version: v0
+  - version: v0.1
 supersedes:
   - ARD-0001 decision 3 — SQLite wired through internal/infra/sqlite
   - ARD-0001 decision 7 — writes are merge patches through CharacterService.Patch
@@ -22,7 +22,13 @@ related:
 accepted before PSD-0001 was written; where the two disagree, this record is the newer decision and
 ARD 0001's Status carries the pointer.
 
-**Revisions.** v0 — initial draft.
+**Revisions.**
+
+- **v0** — initial draft.
+- **v0.1** — review pass against the code and the sibling records. Resolves a dual-authority problem
+  v0 inherited from PSD-0001 §9.1: five row columns duplicate fields the document already declares,
+  and nothing said which one wins (§7 below). Adopts `STRICT` and states the guard against the two
+  `characters` tables meeting in one file, both of which v0 left as unresolved consequences.
 
 ## Context
 
@@ -80,7 +86,15 @@ need its own record.
 
 Generated columns rather than columns the writer populates, because SQLite recomputes them on write
 and they therefore cannot drift from the document. `character_name`, `total_level`, `ruleset_rev`,
-and `campaign_id` are `STORED` so the partial index over live rows can use them.
+and `campaign_id` are `STORED` so the partial index over live rows can use them. §7 extends the same
+reasoning to the columns PSD-0001 §9.1 left as plain ones.
+
+Every table is `STRICT`, for the reason
+`internal/infra/sqlite/migrations/000001_create_characters_table.up.sql` already argues at length:
+without it SQLite stores what it is handed regardless of declared type, and `database/sql` sends a Go
+`[]byte` as a BLOB that TEXT affinity will not convert — so a store binding `[]byte(doc)` instead of
+`string(doc)` would write a blob silently and forever, and every `json_extract` over it would then be
+reading JSONB. With `STRICT` the same mistake is an error at the first write.
 
 ### 2. The character and its item instances are one aggregate, one revision, one conflict domain
 
@@ -96,6 +110,9 @@ editing", instead of one per row.
 
 Every write is `… WHERE id = ? AND doc_revision = ?`. Zero rows affected is a conflict and is
 surfaced, never retried and never silently overwritten.
+
+The value compared is the revision the document was *loaded* at, and the new value is written into
+the document rather than incremented in the column (§7).
 
 This is the same rule `common.Aggregate.Version` implements, arrived at independently, and the
 similarity is worth naming: the mechanism is not being abandoned, only relocated. `dmosh` assumes one
@@ -140,6 +157,32 @@ Nothing else in that appendix is withdrawn: it was right that a projection puts 
 the storage layer, and this record accepts exactly that, having concluded the storage layer is the
 place for it once the storage layer stops being a domain port.
 
+### 7. Row columns are projections of the document; the document is authoritative
+
+PSD-0001 §9.1 gives `characters` four generated columns and five plain ones — `id`, `schema_version`,
+`doc_revision`, `created_at`, `updated_at` — and four of those five duplicate a field
+`character.schema.json` already declares at its root. It does not say which copy wins, and its
+`UPDATE` increments the *column* `doc_revision` while never mentioning `$.doc_revision`. Left there,
+the two diverge on the first save, and the divergence escapes: `export` emits the document, so a
+handed-off or patched character would carry a revision number the store had moved past — which is
+exactly the field PSD-0002's patch flow and `mapper.serverOwnedSheetKeys` both treat as
+authoritative bookkeeping.
+
+**The document wins.** `schema_version`, `doc_revision`, `created_at`, and `updated_at` become
+`GENERATED ALWAYS AS (json_extract(document, …)) STORED` alongside the other four. The store sets
+`$.doc_revision` and `$.updated_at` in the JSON it is about to write, and SQLite projects them; there
+is no second place to forget.
+
+Two exceptions, both forced:
+
+| column | why it stays plain |
+| --- | --- |
+| `id` | SQLite forbids a generated column in a PRIMARY KEY. It is written from `_id` on insert and never updated. |
+| `deleted_at` | It has no document counterpart, deliberately. Soft deletion is a fact about this store's row, not about the character — a deleted character exported and imported elsewhere is not deleted there. |
+
+`id` being the one hand-written copy of a document field is the one place drift remains possible, so
+it is worth an insert-time assertion rather than trust.
+
 ## Consequences
 
 - **The existing character stack is not the flagship application's path to storage.**
@@ -148,12 +191,21 @@ place for it once the storage layer stops being a domain port.
   keep their tests, but their only consumers are `dmostd` and its end-to-end tests. That is a
   layered architecture with no application on top of it.
 - **Two SQLite schemas now both have a `characters` table, with different columns, in different
-  files.** `internal/infra/sqlite`'s is `id/data/created_at/version` and `STRICT`; `internal/store`'s
-  is the document table above. Nothing stops them being pointed at the same file, and if that ever
-  happens both migration runners will fight over it.
+  files.** `internal/infra/sqlite`'s is `id/data/created_at/version`; `internal/store`'s is the
+  document table above. Nothing in either package stops them being pointed at the same file, and if
+  that happens each migration runner sees a `characters` table it cannot read and its own
+  `schema_migrations` row absent. **`internal/store`'s first migration therefore refuses to run
+  against a database holding a `characters` table it did not create**, naming the other tool in the
+  error rather than failing on a missing column later. The reverse guard is `internal/infra/sqlite`'s
+  to add if it ever wants one; nothing points it at a user's data directory today.
 - **Merge-patch write semantics are lost, and with them ARD 0001's reapply-on-conflict offer.**
   A whole-document `UPDATE` cannot be replayed against a newer document the way a patch naming only
   changed fields can.
+- **Revision numbers have gaps, and History shows them.** `doc_revision` advances on every save
+  including the unvalidated debounced ones (ARD 0007), while `character_revisions` rows are written
+  only for validated saves (ARD 0006). So the revisions a user can restore to are a sparse subset of
+  the sequence, and §7.13's Revisions mode will list `r41, r38, r33`. That is honest — those are the
+  revisions that exist — but it must not be mistaken for a missing-rows bug.
 - **`internal/store` must not become a second domain.** The temptation, once it knows
   `$.identity.character_name`, is to keep going. The boundary this record draws is: generated columns
   for listing, `json_group_array` for snapshots, and nothing else. Anything further needs a record.
