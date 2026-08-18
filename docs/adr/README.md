@@ -35,12 +35,12 @@ change a published contract, or reverse an earlier record.
 | # | title | status |
 | --- | --- | --- |
 | [0001](0001-character-sheet-tui.md) | Character sheet TUI | Accepted, superseded in part |
-| [0002](0002-character-document-store.md) | Character storage is a document store the TUI owns | Proposed (v0.1) |
+| [0002](0002-character-document-store.md) | Align the character stack with PSD-0001, breaking it where needed | Proposed (v0.2) |
 | [0003](0003-generated-types-as-representation.md) | Generated schema types are the in-memory representation | Proposed (v0.1) |
 | [0004](0004-play-log-schema-change.md) | `play_log` enters `character.schema.json` as Phase 0 pre-work | Proposed (v0.1) |
 | [0005](0005-derivation-boundary.md) | Derived values are arithmetic over inputs, never rules tables | Proposed (v0.1) |
-| [0006](0006-undo-snapshots-restore.md) | Undo is in-session; history is snapshots that write forward | Proposed (v0.1) |
-| [0007](0007-autosave-and-validation-gates.md) | Autosave is unvalidated; validation gates the boundaries | Proposed (v0.1) |
+| [0006](0006-undo-snapshots-restore.md) | Undo is in-session; history is snapshots that write forward | Proposed (v0.2) |
+| [0007](0007-autosave-and-validation-gates.md) | Autosave is unvalidated; validation gates the boundaries | Proposed (v0.2) |
 | [0008](0008-cli-shape-and-ambient-resolution.md) | One binary, cobra subtrees, and ambient target resolution | Proposed (v0.1) |
 | [0009](0009-testing-strategy.md) | Four test layers, with the round-trip corpus load-bearing | Proposed (v0.1) |
 

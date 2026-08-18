@@ -13,14 +13,14 @@ convention this record is not edited; the newer reasoning lives in the records n
 | --- | --- |
 | 1 — nested module at `cmd/dmosh`, UI in `pkg/tui` | **in force**, extended by ARD 0008 (cobra subtrees, a constructible root command). PSD-0001 places the UI in `internal/`; that half is unsettled. |
 | 2 — embedded, not networked | **in force** |
-| 3 — SQLite, file-backed via `internal/infra/sqlite` | **superseded by ARD 0002** (a document store the TUI owns), and its location by **ARD 0008 §8** (XDG data dir, not `os.UserConfigDir`) |
+| 3 — SQLite, file-backed via `internal/infra/sqlite` | **in force**, reaffirmed by ARD 0002; only the location changes, per **ARD 0008 §8** (XDG data dir, not `os.UserConfigDir`) |
 | 4 — Bubble Tea and Lip Gloss | **in force**, extended by PSD-0001 §3 (cobra, bubbles, huh, glamour, log) |
 | 5 — a section list beside a detail pane | **in force in substance**; restated at greater fidelity by PSD-0001 §7, which adds three layout tiers |
 | 6 — section-scoped view models, not the generated type | **superseded by ARD 0003** (generated types are the representation) |
-| 7 — writes are merge patches through `CharacterService.Patch` | **superseded by ARD 0002** (whole-document writes under a revision predicate) |
+| 7 — writes are merge patches through `CharacterService.Patch` | **narrowed by ARD 0002 §3** — merge patches stay as the wire's partial-write shape; the TUI writes whole documents because it holds the whole document |
 | 8 — explicit save, with a conflict prompt | **superseded by ARD 0007** (unvalidated autosave; conflict detection without resolution) |
 | 9 — model unit tests plus golden `View()` snapshots | **superseded by ARD 0009** (teatest adopted; the fixed-width and unstyled-profile rules kept) |
-| appendix — `CharacterRepository.List` | **withdrawn by ARD 0002 §6**; the picker reads a projection in SQL instead |
+| appendix — `CharacterRepository.List` | **adopted and widened by ARD 0002 §2**, including the projection it said would need its own record — **ARD 0002 §8** is that record |
 
 Everything below is what was believed when it was written, which is the point of the series.
 
