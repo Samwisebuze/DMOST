@@ -4,7 +4,7 @@ title: Undo is in-session; history is snapshots that write forward
 updated: 2026-08-18
 status:
   - kind: proposed
-  - version: v0
+  - version: v0.1
 related:
   - docs/psd/0001_character-management-tui.md
   - docs/adr/0002-character-document-store.md
@@ -18,7 +18,13 @@ related:
 **Proposed.** Depends on ARD 0002, which puts the character and its item instances in one conflict
 domain under one revision — the property that makes restore expressible as a single transaction.
 
-**Revisions.** v0 — initial draft.
+**Revisions.**
+
+- **v0** — initial draft.
+- **v0.1** — review pass. Three gaps, all in the space between §2's trigger and §5's pruning: what
+  actually fires a snapshot is more frequent than "validated save" suggests (§6), a restored revision
+  is indistinguishable from an ordinary one in the table (§7), and nothing said where the `summary`
+  text comes from (§8).
 
 ## Context
 
@@ -113,13 +119,61 @@ reclaims it.
 Union rather than intersection is the whole rule, and it is easy to implement backwards. The numbers
 are tunable defaults; the union is not.
 
+### 6. The trigger is explicit save and session end — not every navigation-away
+
+PSD-0001 §8.5 gates validation on `Ctrl+S`, on navigation away from the editor, and on `export`; §8.6
+then says every *validated* save snapshots. Composed literally, that means a snapshot every time the
+user leaves a section screen — which in an evening of editing is dozens, and pruning's most-recent-50
+would then churn inside a single session. §5's claim that "one saved occasionally over a year keeps a
+year of history" would be false for anyone who actually uses the tool.
+
+So the two are separated: **validation runs on navigation-away, snapshots do not.** A snapshot is
+written on explicit `Ctrl+S` and on session end, and an insert whose document is byte-identical to the
+newest existing revision is skipped rather than stored.
+
+That makes a revision mean something a user can recognize — "I decided this was a good state" or "I
+finished a session" — instead of "I pressed Escape". It also makes §7.13's Revisions mode legible,
+since a list where forty of fifty entries are screen exits is not a history anyone reads.
+
+### 7. A restored revision says what it was restored from
+
+§4 writes a restore forward as a new revision, which means the table ends up holding two rows with
+identical documents and different numbers, and nothing distinguishing them. History mode would render
+`r42` and `r39` as unrelated saves, and `r42`'s `summary` would either be empty or a lie.
+
+`character_revisions` therefore carries one more column, `restored_from INTEGER`, null on an ordinary
+save and set to the source revision on a restore. History renders it (`r42  restored from r39`), and
+the confirmation prompt that names the `play_log` exemption can name the source too. Nothing has
+shipped, so this is a change to migration 1 rather than a migration of its own.
+
+### 8. `summary` comes from the mutation, not from a diff
+
+`character_revisions.summary` is a one-line description of what changed, and §7.13's Revisions mode is
+built entirely out of it:
+
+```
+r41  2026-08-10 14:02  Spellcasting — expended a 1st-level slot
+```
+
+Nothing in PSD-0001 says who writes that string. The tempting answer is a document diff, and it is the
+wrong one: a diff can see that `slots_used` went from 1 to 2, but not that the user cast a spell, and
+the strings above are all statements of intent rather than of delta.
+
+So the summary is composed from the typed mutation messages the parent model already applies (§5.1) —
+the screen that emitted them and the action they represent — accumulated since the last snapshot and
+rendered as "section — most significant action, plus N more". The model is the only place that knows
+intent, and it already sees every mutation in one place, which is the same property ARD 0005 relies on.
+
 ## Consequences
 
 - **The store is now the durability story, and it is a better one than files were.** `history` plus
   `restore --at` is strictly more than a directory of JSON files had. ARD 0002's `export` envelope and
   the readable `document` column cover the rest of what the file design offered.
-- **Restorable revisions are a sparse subset of the revision sequence**, because autosave advances
-  `doc_revision` without snapshotting. History will show gaps; they are honest.
+- **Restorable revisions are a sparse subset of the revision sequence**, and §6 makes them sparser
+  still: autosave and navigation-away both advance `doc_revision` without snapshotting. History shows
+  gaps, and they are honest.
+- **The parent model owes the store a summary on every save**, which is a coupling §8 accepts
+  deliberately: the store cannot compose that string, and no other component sees every mutation.
 - **Snapshot storage grows with editing, not with time**, and the only reclamation is `purge`, which
   is also the only path that deletes a character.
 - **Whether any of this is used is an open question with an instrument.** §12 question 5 counts
