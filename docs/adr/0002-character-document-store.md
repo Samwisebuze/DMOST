@@ -1,211 +1,261 @@
 ---
 id: ARD-0002
-title: Character storage is a document store the TUI owns
+title: Align the character stack with PSD-0001, breaking it where needed
 updated: 2026-08-18
 status:
   - kind: proposed
-  - version: v0.1
-supersedes:
-  - ARD-0001 decision 3 — SQLite wired through internal/infra/sqlite
-  - ARD-0001 decision 7 — writes are merge patches through CharacterService.Patch
-  - ARD-0001 appendix — the proposed CharacterRepository.List port method
+  - version: v0.2
+narrows:
+  - ARD-0001 decision 7 — merge patches remain the wire's write shape, not the TUI's
+adopts:
+  - ARD-0001 appendix — CharacterRepository.List, widened past what it proposed
 related:
   - docs/psd/0001_character-management-tui.md
   - internal/infra/sqlite/migrations/000001_create_characters_table.up.sql
+  - pkg/app/service.go
 ---
 
-# ARD 0002 — Character storage is a document store the TUI owns
+# ARD 0002 — Align the character stack with PSD-0001, breaking it where needed
 
 ## Status
 
-**Proposed.** No code exists for this yet. It supersedes three parts of ARD 0001, which was
-accepted before PSD-0001 was written; where the two disagree, this record is the newer decision and
-ARD 0001's Status carries the pointer.
+**Proposed.** No code exists for the TUI yet, and the code that does exist changes under this record.
+It reaffirms ARD 0001 decision 3 — `internal/infra/sqlite` behind the repository port — and narrows
+decision 7 rather than reversing it.
 
 **Revisions.**
 
-- **v0** — initial draft.
-- **v0.1** — review pass against the code and the sibling records. Resolves a dual-authority problem
-  v0 inherited from PSD-0001 §9.1: five row columns duplicate fields the document already declares,
-  and nothing said which one wins (§7 below). Adopts `STRICT` and states the guard against the two
-  `characters` tables meeting in one file, both of which v0 left as unresolved consequences.
+- **v0** — initial draft. Had the TUI own a private `internal/store`, bypassing `pkg/domain`,
+  `pkg/app` and `internal/infra/sqlite`, and withdrew ARD 0001's proposed `List` port method.
+- **v0.1** — review pass on that design: row columns as projections, `STRICT`, and a guard against two
+  `characters` tables meeting in one file.
+- **v0.2** — **reframed, reversing v0's central decision.** v0 left the repository with two persistence
+  stacks and the existing one serving only `dmostd`. `dmostd` is speculative — no users, no deployed
+  database, an in-memory repository that loses everything on exit — so the stack is the thing worth
+  keeping and `dmostd`'s current shape is not. This record now proposes the breaking changes that align
+  `pkg/domain/character`, `pkg/app` and `internal/infra/sqlite` with PSD-0001. v0.1's projection
+  finding survives inverted (§8); its two-tables guard is moot and dropped.
 
 ## Context
 
-ARD 0001 decided that `dmosh` would reach storage the way `dmostd` does: `pkg/tui` → `pkg/app` →
-`pkg/domain/character`, with `internal/infra/sqlite` behind the `CharacterRepository` port and
-writes expressed as RFC 7396 merge patches through `CharacterService.Patch`. It also proposed adding
-`List` to the port, because a picker screen had nothing to call.
+PSD-0001 §5.3 and §9 describe an `internal/store` package that "owns all persistence; no other package
+issues SQL", loading with `SELECT document FROM characters WHERE id = ? AND deleted_at IS NULL` and
+saving with a whole-document `UPDATE` under a trailing revision predicate. Nothing in that path passes
+through `pkg/domain`, `pkg/app`, `internal/dto/v1alpha/mapper`, or `internal/infra/sqlite`.
 
-PSD-0001 specifies something different, and not by oversight — §5.3 and §9 describe an
-`internal/store` package that "owns all persistence; no other package issues SQL", loading with
-`SELECT document FROM characters WHERE id = ? AND deleted_at IS NULL` and saving with
-`UPDATE characters SET document = ?, doc_revision = doc_revision + 1, updated_at = ? WHERE id = ? AND doc_revision = ?`.
-Nothing in that path passes through `pkg/domain`, `pkg/app`, `internal/dto/v1alpha/mapper`, or
-`internal/infra/sqlite`.
+Read as a specification of *storage behaviour* it is right, and this record adopts nearly all of it. Read
+as a specification of *package structure* it would fork the repository, because the behaviour it asks for
+is a superset of what the existing stack does rather than a different thing:
 
-The gap is not stylistic. The two designs disagree about what a character *is* at rest.
+| PSD-0001 wants | the stack has | gap |
+| --- | --- | --- |
+| a JSON document stored verbatim, opaque to the layer above | exactly that — `characters.data TEXT NOT NULL CHECK (json_valid(data))` | none |
+| optimistic concurrency on a revision | `Save` is a compare-and-set on `common.Aggregate.Version`; a stale write is `common.ErrConflict` | naming only |
+| enumeration for a picker, sorted by name, without decoding every row | `CharacterRepository` is `Save` and `Find` | a port method and a projection |
+| soft delete, `undelete`, `purge` | nothing | port methods and a column |
+| snapshots written in the save transaction | nothing | a table and a save option |
+| item instances sharing the character's revision | nothing | an entity and an aggregate boundary |
+| a whole-document write that skips schema validation (autosave) | `Update` always gates on the schema | a use case |
 
-- **The existing stack stores an opaque sheet under an aggregate.**
-  `internal/infra/sqlite/migrations/000001_create_characters_table.up.sql` is four columns — `id`,
-  `data`, `created_at`, `version` — and its comment says so outright: "the character aggregate is an
-  identity, an opaque sheet, a creation instant, and a version, and this table is those four and
-  nothing else." The domain deliberately cannot see inside `data`.
-- **PSD-0001 stores a queryable document.** Its `characters` table carries `deleted_at` for soft
-  delete, `schema_version`, and four `GENERATED ALWAYS AS (json_extract(document, …)) STORED`
-  columns so that `list` sorts by name and level in SQL rather than decoding every row in Go — which
-  is what §2's sub-100ms startup budget rests on. Generated columns require the storage layer to know
-  the sheet's shape. That is precisely the knowledge `pkg/domain/character` is built not to have.
+Seven rows, five of which are additive. That is a change list, not an incompatibility.
 
-Three further requirements in PSD-0001 have no expression in the port as it stands: soft delete with
-an `undelete`/`purge` pair (D8), a snapshot table written inside the same transaction as the update
-(D17, §8.6), and item instances that share the character's revision so that character-plus-items is
-one conflict domain (D20, §9.4). Each of those is a multi-statement transaction. `Save(ctx, *Character)`
-cannot express one, and widening the port until it can would mean pushing snapshots, soft deletion,
-and the item table into `pkg/domain` — a domain that would then know about revisions tables.
+**What decides it is that nothing has shipped.** `cmd/dmostd` wires `inmem`, so every character the
+daemon has ever stored died with the process; `internal/infra/sqlite` is wired into nothing at all; the
+only clients of the HTTP API are its own end-to-end tests. There is no deployed database, no external
+consumer of `v1alpha` (the `internal/` prefix guarantees it), and no user whose data a breaking change
+could damage. Breaking changes to this stack are as cheap right now as they will ever be, and the cost
+of a second stack — two persistence layers, two migration runners, two answers to "how is a character
+stored" — is permanent.
 
-So the question this record answers is not "SQLite or not". It is: **does the TUI reach storage
-through the existing domain port, or does it own a document store directly?**
+`pkg/app`'s own doc comment already anticipates the pressure the TUI applies. On `UserService.Create`:
+
+> That is deliberate **for now**: the mapper is where request validation already lives […] It does mean
+> this layer is pinned to v1alpha. When a second version lands, the fix is a version-neutral command
+> struct per use case, with each dto version mapping into it — not a second Create method.
+
+A second *consumer* arrives before a second version does, and it applies the same force: a TUI holding a
+decoded document should not have to construct a `v1alpha.UpdateCharacterRequest` to save it.
 
 ## Decision
 
-**`internal/store` owns character persistence for `dmosh`, directly over `database/sql`. It does not
-go through `pkg/domain/character`, `pkg/app`, or `internal/infra/sqlite`.**
+**`internal/store` is not built. `pkg/domain/character`, `pkg/app` and `internal/infra/sqlite` are
+extended to meet PSD-0001's requirements, breaking their current shape where that is what it takes.**
 
 ```
-cmd/dmosh  →  internal/tui  →  internal/store  →  modernc.org/sqlite
-                     ↘  internal/character (documents + derive, ARD 0003, ARD 0005)
+cmd/dmosh  →  pkg/tui  →  pkg/app (command structs)  →  pkg/domain/character
+                                        ↑                        ↑
+cmd/dmostd →  pkg/http  →  internal/dto/v1alpha/mapper    internal/infra/{inmem,sqlite}
 ```
 
-### 1. The document is the aggregate root; the row is its home
+### 1. The aggregate boundary becomes character-plus-items
 
-The `document` column holds the full `character.schema.json` document as JSON *text*, unmodified.
-JSON1 functions project a few fields out of it for indexing and ordering. They never decompose it:
-there is no `abilities` table, no `inventory_entries` table, and adding one is a decision that would
-need its own record.
+D20 makes a character and its item instances one conflict domain under one revision. That is an
+aggregate boundary, so it is stated in the domain rather than implied by a transaction.
 
-Generated columns rather than columns the writer populates, because SQLite recomputes them on write
-and they therefore cannot drift from the document. `character_name`, `total_level`, `ruleset_rev`,
-and `campaign_id` are `STORED` so the partial index over live rows can use them. §7 extends the same
-reasoning to the columns PSD-0001 §9.1 left as plain ones.
+`ItemInstance` becomes an entity in `pkg/domain/character` — an identity and an opaque document, the same
+shape `Character` already has — and `Character` gains an item set. `Save` persists the whole aggregate;
+one revision covers all of it; `common.ErrConflict` means the same thing it means today.
 
-Every table is `STRICT`, for the reason
-`internal/infra/sqlite/migrations/000001_create_characters_table.up.sql` already argues at length:
-without it SQLite stores what it is handed regardless of declared type, and `database/sql` sends a Go
-`[]byte` as a BLOB that TEXT affinity will not convert — so a store binding `[]byte(doc)` instead of
-`string(doc)` would write a blob silently and forever, and every `json_extract` over it would then be
-reading JSONB. With `STRICT` the same mistake is an error at the first write.
+**Lazy loading is expressed in the aggregate, not worked around it.** §7.9 loads an item on first
+selection, so a `Character` returned by `Find` has its items *unloaded*, which is a third state distinct
+from "loaded and empty". A `Save` of a Character whose items are unloaded leaves the stored items
+untouched; a `Save` of one whose items are loaded replaces them. That rule is a property of the port, so
+it belongs in `internal/test/repotest` where `inmem` and `sqlite` are both held to it.
 
-### 2. The character and its item instances are one aggregate, one revision, one conflict domain
+This is the sharpest cost in the record, and it is worth naming as a cost: an aggregate whose save
+semantics depend on whether part of it was loaded is a subtlety that will catch someone.
 
-`item_instances` rows carry no revision of their own (D20). The character's `doc_revision` covers the
-whole aggregate: editing an item marks the character dirty, and the item write joins the character's
-transaction under the character's `doc_revision` predicate.
+### 2. The port grows from two methods to seven
 
-This is what makes snapshot restore a clean transition rather than a partial one, which ARD 0006
-takes up. It also means there is exactly one answer to "did someone else change this while I was
-editing", instead of one per row.
-
-### 3. Optimistic concurrency is the trailing `doc_revision` predicate
-
-Every write is `… WHERE id = ? AND doc_revision = ?`. Zero rows affected is a conflict and is
-surfaced, never retried and never silently overwritten.
-
-The value compared is the revision the document was *loaded* at, and the new value is written into
-the document rather than incremented in the column (§7).
-
-This is the same rule `common.Aggregate.Version` implements, arrived at independently, and the
-similarity is worth naming: the mechanism is not being abandoned, only relocated. `dmosh` assumes one
-intended writer per character (§8.5); the check exists because it is a side effect of using the
-database correctly, not because v1 has a multi-writer story. What v1 does *with* a conflict is
-ARD 0007's problem.
-
-### 4. Soft delete lives in the store, and `purge` is what completes it
-
-`deleted_at IS NULL` means live. `delete` is an `UPDATE`, `undelete` clears the column, and `purge`
-is the only path that issues a real `DELETE` — therefore the only one that fires the
-`ON DELETE CASCADE` on `character_revisions` and `item_instances`. Without `purge`, soft deletion
-alone means the database grows without bound and the cascades never run.
-
-`foreign_keys = ON` is not decoration here. SQLite ignores foreign keys by default, so without the
-pragma the cascades silently do nothing and `purge` orphans rows. It sits alongside `journal_mode =
-WAL` (so `dmosh character show` against a database the TUI has open is a legitimate workflow) and
-`busy_timeout = 5000`, per D11.
-
-### 5. Its own numbered migrations, not `golang-migrate`
-
-`internal/store` applies numbered `.sql` files embedded with `go:embed` against its own
-`schema_migrations` table.
-
-The root module already depends on `golang-migrate/migrate/v4` for `internal/infra/sqlite`, so this
-is a second migration mechanism in one repository and that cost is real. It is taken because
-`golang-migrate` brings a driver-registry and a `Close` that closes the `*sql.DB` handed to it — a
-hazard CLAUDE.md documents and `internal/infra/sqlite` works around — in exchange for features this
-store does not use: no down-migrations in the CLI surface, no remote sources, no version forcing.
-A `for` loop over embedded files and one table is the whole requirement.
-
-### 6. `CharacterRepository.List` is withdrawn
-
-ARD 0001 proposed adding `List(context.Context) ([]Character, error)` to the port, with a `repotest`
-contract case, `inmem` and `sqlite` implementations, and `FindAll` on the service. **None of that is
-needed.** The picker reads `SELECT id, character_name, total_level, updated_at FROM characters WHERE
-deleted_at IS NULL ORDER BY character_name` — the query ARD 0001's own appendix said would be the
-right move "if enumeration ever becomes slow enough to matter", reached immediately because the
-generated columns make it free.
-
-Nothing else in that appendix is withdrawn: it was right that a projection puts schema knowledge into
-the storage layer, and this record accepts exactly that, having concluded the storage layer is the
-place for it once the storage layer stops being a domain port.
-
-### 7. Row columns are projections of the document; the document is authoritative
-
-PSD-0001 §9.1 gives `characters` four generated columns and five plain ones — `id`, `schema_version`,
-`doc_revision`, `created_at`, `updated_at` — and four of those five duplicate a field
-`character.schema.json` already declares at its root. It does not say which copy wins, and its
-`UPDATE` increments the *column* `doc_revision` while never mentioning `$.doc_revision`. Left there,
-the two diverge on the first save, and the divergence escapes: `export` emits the document, so a
-handed-off or patched character would carry a revision number the store had moved past — which is
-exactly the field PSD-0002's patch flow and `mapper.serverOwnedSheetKeys` both treat as
-authoritative bookkeeping.
-
-**The document wins.** `schema_version`, `doc_revision`, `created_at`, and `updated_at` become
-`GENERATED ALWAYS AS (json_extract(document, …)) STORED` alongside the other four. The store sets
-`$.doc_revision` and `$.updated_at` in the JSON it is about to write, and SQLite projects them; there
-is no second place to forget.
-
-Two exceptions, both forced:
-
-| column | why it stays plain |
+| method | why |
 | --- | --- |
-| `id` | SQLite forbids a generated column in a PRIMARY KEY. It is written from `_id` on insert and never updated. |
-| `deleted_at` | It has no document counterpart, deliberately. Soft deletion is a fact about this store's row, not about the character — a deleted character exported and imported elsewhere is not deleted there. |
+| `Save(ctx, *Character, ...SaveOption)` | as today, plus `WithSnapshot(summary)` so the revision row is written in the same transaction (ARD 0006) |
+| `Find(ctx, CharacterID)` | as today; items unloaded |
+| `FindItems(ctx, CharacterID, ItemInstanceID)` | the lazy fetch behind §7.9's detail pane |
+| `List(ctx, ListOptions)` | enumeration for the picker and `dmosh character list`; `ListOptions` carries `IncludeDeleted` and the ordering |
+| `SoftDelete` / `Undelete` | D8, the `deleted_at` transition |
+| `Purge(ctx, CharacterID)` | the only real `DELETE`, and the only one that cascades |
+| `Revisions(ctx, CharacterID)` and `FindRevision(ctx, CharacterID, selector)` | ARD 0006's history and the snapshot a restore reads |
 
-`id` being the one hand-written copy of a document field is the one place drift remains possible, so
-it is worth an insert-time assertion rather than trust.
+**`restore` is orchestration in `pkg/app`, not a port method.** It reads a revision, splices `play_log`
+from the current document per ARD 0004 §5, and calls `Save` — which writes forward as a new revision and
+carries the snapshot's item set. One write, so no transaction spans two port calls, and the splice
+stays above the adapter: preserving one JSON field is schema knowledge, and §8 is the only place this
+record lets that into a storage layer.
+
+### 3. `pkg/app` takes version-neutral commands
+
+The service interfaces stop taking `v1alpha` request types and take command structs owned by `pkg/app`.
+`internal/dto/v1alpha/mapper` maps a request into a command; `pkg/tui` builds one directly.
+
+This is the change `pkg/app`'s doc comment names, arriving for the reason it predicted. It is also the
+largest breaking change here: every method on `CharacterService` and `UserService` changes signature, and
+`pkg/http`, `cmd/dmostd`, `pkg/http/user_test.go`'s `FakeUserService`, and the mapper all change with
+them.
+
+Two write use cases rather than one flag, because ARD 0007 needs them to differ in kind:
+
+| use case | schema gate | snapshot |
+| --- | --- | --- |
+| `SaveCharacterDraft` — the 2s debounced autosave | none; the document must decode, nothing more (ARD 0007 §7) | no |
+| `ReplaceCharacter` — `Ctrl+S`, session end, `import`, wizard completion | full, with JSON Pointer paths | yes, with a summary |
+
+`Patch` survives unchanged in purpose: it is the wire's partial-write shape, and ARD 0001 decision 7 is
+narrowed rather than superseded — merge patches stay for HTTP, and the TUI writes whole documents because
+it holds the whole document already.
+
+### 4. Validation becomes the compiled schema, and `validateSheet` is replaced
+
+`mapper.validateSheet` decodes into the generated type and discards the result. Per ARD 0003 that decode
+is no longer the gate: the gate is `santhosh-tekuri/jsonschema` compiled from the vendored schema, which
+is the only thing that produces the JSON Pointer paths PSD-0001 §6 promises and ARD 0007 §4 renders.
+
+The consequence reaches the wire: `pkg/http/problem`'s `reason` for an invalid sheet becomes a list of
+pointers instead of a Go type error, which is strictly better and is still a breaking change to what a
+client sees.
+
+### 5. `version` stays authoritative; the document's copies are written at the boundary
+
+**This inverts v0.1 §7.** That revision had the document win, because in v0's design the row's columns
+were the only other copy and nothing owned them. Here `common.Aggregate.Version` owns the revision — set
+inside the adapter's critical section through `CharacterFactory.NextVersion`, exactly as
+`inmem.Save` already does it — so the aggregate wins.
+
+`_id`, `created_at`, `updated_at` and `doc_revision` inside the sheet become projections written at the
+mapper boundary from the aggregate, on the way out. There is no generated column for `doc_revision`: the
+existing `version` column is authoritative and already indexed by the primary key's rowid. `deleted_at`
+stays a column with no document counterpart, deliberately — soft deletion is a fact about this store's
+row, and a deleted character exported and imported elsewhere is not deleted there.
+
+This keeps `mapper.serverOwnedSheetKeys` honest: those fields are refused from clients precisely because
+something else owns them, and now something does.
+
+### 6. Migrations are additive, and SQLite's rules make that possible
+
+`000001_create_characters_table.up.sql` is not edited — CLAUDE.md's rule stands, and the table it creates
+is already the right shape for a document store. What follows are new numbered pairs:
+
+- `deleted_at TEXT` — `ALTER TABLE ADD COLUMN`, fine on a `STRICT` table.
+- the listing projections — `character_name`, `total_level`, `ruleset_rev`, `campaign_id` — as
+  **`VIRTUAL`** generated columns over `json_extract(data, …)`, each with an index.
+- `character_revisions` (with ARD 0006 §7's `restored_from`) and `item_instances`, both with
+  `ON DELETE CASCADE` and both `STRICT`.
+
+`VIRTUAL` rather than `STORED` is forced and worth knowing: **SQLite's `ALTER TABLE ADD COLUMN` cannot
+add a `STORED` generated column**, so `STORED` would mean a twelve-step table rebuild — new table, copy,
+drop, rename — to gain a column whose value is already indexed. Virtual generated columns are indexable,
+and an index over one stores the extracted value, so the query plan for
+`ORDER BY character_name` reads the index rather than re-extracting per row. The startup budget in §2 is
+met either way.
+
+PSD-0001 names the column `document`; it is `data` here. The name is not a requirement, and renaming a
+shipped column to match a spec's prose is churn.
+
+### 7. `foreign_keys`, `WAL` and `busy_timeout` are already the adapter's rules
+
+`internal/infra/sqlite` already folds per-connection settings into the DSN rather than issuing an `Exec`
+— because an `Exec` after `sql.Open` configures one pooled connection and silently misses the rest — and
+already documents `ForeignKeys` as the constraint that must be on. D11 asks for exactly that set. What
+changes is the composition root's configuration, not the adapter: a file DSN under ARD 0008's XDG path,
+`WAL`, and a non-zero `busy_timeout`.
+
+`foreign_keys` stops being hygiene and becomes load-bearing the moment §6's cascades exist: without it
+they silently do nothing and `purge` orphans rows.
+
+### 8. The one crack in the opacity rule: `CharacterSummary`
+
+ARD 0001's appendix argued that `List` must return full aggregates, because a projection "would require
+the repository to know the sheet's shape, which is the one thing `pkg/domain/character` is built not to
+know" — and said that if enumeration ever became slow enough to matter, the move would be a summary type
+populated by `json_extract`, "a decision worth its own record, because it puts schema knowledge into a
+storage adapter for the first time".
+
+**This is that record, and the decision is to do it now rather than when it hurts.** PSD-0001 §2 budgets
+under 100ms to first paint against hundreds of rows, and explicitly rules out re-parsing every row's
+document to populate a picker. Returning full aggregates and decoding them in Go is the thing that
+budget forbids.
+
+So `List` returns `[]CharacterSummary` — identity, version, timestamps, deleted state, plus
+`character_name` and `total_level`. It is read-only, never a write path, and it is the single place where
+this domain admits what is inside a sheet. `sqlite` populates it from §6's generated columns; `inmem`
+decodes those two fields; `repotest` holds both to the same answers.
+
+The cost is exactly the one ARD 0001 named: `pkg/domain/character` now has a type that changes if the
+schema's `identity` or `progression` sections change. Two fields, one direction, one documented
+justification — bounded, but real, and this record is where anyone widening it should have to argue.
+
+### 9. `dmostd` stays on `inmem`, and the two roots keep both backends honest
+
+`dmosh` wires `sqlite`, `dmostd` keeps `inmem`. That is ARD 0001 decision 2's reasoning unchanged: two
+composition roots wiring different backends keep both implementations exercised above the level of the
+contract tests.
+
+`inmem` therefore implements all seven port methods, including soft delete, revisions, and the lazy item
+semantics of §1. That is real work, and it is the right work — CLAUDE.md calls `inmem` the reference
+implementation of the versioning rule, not a test double, and a port whose rules only one adapter obeys
+is a port with one implementation.
 
 ## Consequences
 
-- **The existing character stack is not the flagship application's path to storage.**
-  `pkg/domain/character`, `pkg/app/services.CharacterService`, `internal/dto/v1alpha/mapper`,
-  `internal/jsonmerge`, `internal/infra/sqlite`, and `pkg/http`'s character handlers keep working and
-  keep their tests, but their only consumers are `dmostd` and its end-to-end tests. That is a
-  layered architecture with no application on top of it.
-- **Two SQLite schemas now both have a `characters` table, with different columns, in different
-  files.** `internal/infra/sqlite`'s is `id/data/created_at/version`; `internal/store`'s is the
-  document table above. Nothing in either package stops them being pointed at the same file, and if
-  that happens each migration runner sees a `characters` table it cannot read and its own
-  `schema_migrations` row absent. **`internal/store`'s first migration therefore refuses to run
-  against a database holding a `characters` table it did not create**, naming the other tool in the
-  error rather than failing on a missing column later. The reverse guard is `internal/infra/sqlite`'s
-  to add if it ever wants one; nothing points it at a user's data directory today.
-- **Merge-patch write semantics are lost, and with them ARD 0001's reapply-on-conflict offer.**
-  A whole-document `UPDATE` cannot be replayed against a newer document the way a patch naming only
-  changed fields can.
-- **Revision numbers have gaps, and History shows them.** `doc_revision` advances on every save
-  including the unvalidated debounced ones (ARD 0007), while `character_revisions` rows are written
-  only for validated saves (ARD 0006). So the revisions a user can restore to are a sparse subset of
-  the sequence, and §7.13's Revisions mode will list `r41, r38, r33`. That is honest — those are the
-  revisions that exist — but it must not be mistaken for a missing-rows bug.
-- **`internal/store` must not become a second domain.** The temptation, once it knows
-  `$.identity.character_name`, is to keep going. The boundary this record draws is: generated columns
-  for listing, `json_group_array` for snapshots, and nothing else. Anything further needs a record.
+- **One persistence stack, one aggregate, two applications.** The alternative — v0's design — is now on
+  record as considered and rejected, which is what the series is for.
+- **A wide breaking change, landing across:** `pkg/domain/character` (aggregate, port, `Rehydrate`
+  signature, new entity, `CharacterSummary`), `pkg/app` (command structs, two new use cases),
+  `pkg/app/services`, `internal/dto/v1alpha/mapper` (request→command, compiled-schema validation),
+  `internal/infra/inmem`, `internal/infra/sqlite`, `internal/test` and `internal/test/repotest`,
+  `pkg/http`, and `cmd/dmostd`. Everything the daemon exposes keeps working; almost every signature
+  behind it changes.
+- **`pkg/app` stops being pinned to `v1alpha`**, which is a benefit taken as a side effect rather than
+  the goal, and it costs every call site.
+- **`pkg/domain/character` is no longer entirely opaque** (§8). Two fields, in one read-only type.
+- **An aggregate with a partially-loaded child set is a subtle object** (§1), and the port contract is
+  the only thing that will keep the two adapters agreeing about it.
+- **PSD-0001 §5.3 and §9 are now inaccurate as written** — there is no `internal/store`, the column is
+  `data` not `document`, and the revision predicate is the aggregate's `version`. The spec should be
+  revised to match; its *behaviour* is adopted essentially whole, which is why this is a documentation
+  fix rather than a disagreement.
+- **`usage_counters` (§12) has no aggregate and does not get one.** It is `dmosh`-local, never leaves the
+  machine, and the composition root can hand the TUI a small counter store from `internal/infra/sqlite`
+  without a domain port. `catalog_entries` is Phase 2b, needs a real aggregate, and is its own record.
+- **`GET /characters` is still not proposed.** The port can enumerate now, so the door is open, but a
+  wire surface for listing is a `v1alpha` addition with its own cost and its own decision.
