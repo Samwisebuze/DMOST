@@ -1,575 +1,1147 @@
----
-title: "Product Specification: GM Session Tool (v0)"
-component: "dmosh CLI — gm subsystem"
-status: "Draft v0.6"
-audience: "Engineering (Go/TUI implementers), project contributors"
-related_docs:
-  - docs/psd/0001_character-management-tui.md
-  - docs/jsonschema/character.schema.json
-  - docs/psd/share/dnd-2024-character-schema-report.md
----
+# D&D 2024 Rules Research & Document-Database Schema for a Character Management Tool
 
-# Product Specification: GM Session Tool (v0)
+**Target ruleset:** *Dungeons & Dragons* 2024 core rules (Player's Handbook, Sept 2024; Dungeon Master's Guide, Nov 2024; Monster Manual, Feb 2025). D&D Beyond now labels this content "5.5e" and the 2014 content "5e"; Wizards describes it as a revision, not a new edition, and the two are intended to be cross-compatible.
 
-## 0. Decision record
-
-| # | Question | Resolution | Where |
-|---|---|---|---|
-| 1 | Patch op format | Semantic ops naming intent, never JSON Pointers into the character document | §6.3 |
-| 2 | `grant_item` payload | Opaque to the GM tool — stored and forwarded, never inspected | §6.3 |
-| 3 | Op vocabulary stability | No compatibility guarantee in v0; unknown kinds skip rather than fail | §10.7 |
-| 4 | Patch idempotency | Per op, recorded in the character log; re-apply re-offers the unresolved remainder | §6.3 |
-| 5 | Ending HP | No HP op — both parties watched the damage happen | §6.3 |
-| 6 | Player-tracked resources | No resource op, same reasoning; the vocabulary is nine ops | §6.3 |
-| 7 | Initiative | Typed in, never rolled; entered in any order; adversary instances share one count by default | §7.3 |
-| 8 | Campaigns per database | One | §8.3 |
-| 9 | Stale snapshots | Flagged on the party board and in `party list`, measured in sessions since import | §7.2 |
-| 10 | Splitting an adversary | Keeps the parent's count, pre-filled for override; takes the instance's own label | §7.3 |
-
-**v0.5 changes:** decision 6 is new (`adjust_resource` dropped). The rest of this revision is corrective — it closes the gaps an implementation review found: no capture path existed for the award events the tool exists to emit (§5.4, §7.2), participants and events had no ids (§5.2, §5.4), party HP between fights had nowhere to live (§5.1), encounter `status` was rendered but not modelled (§5.2), and patch regeneration could mint fresh ULIDs and double-award (§6.3). Repetition across sections has been cut in favour of this table.
-
-**v0.6 changes:** the last of §12's questions are settled. Initiative entry became an any-order editable mode rather than a sequential pass, because numbers arrive at a table in whatever order people speak (§7.3). Splitting an adversary keeps the parent's count with the field pre-filled for override, and the `tiebreak - 1` offset is gone — the sort's existing insertion-order key already does that work (§5.2, §7.3). Entry and group labels are specified (§5.2). Staleness stays on the session-delta signal already in the document; no second measure was added.
-
-**Naming:** the binary is `dmosh`. This revision renames every invocation, the character store (`dmosh.db`), and the fallback data directory (`$XDG_DATA_HOME/dmosh/`) accordingly. The latter two are defined by the character TUI spec and need the same edit there; the character tool's database resolver should also fall back to a pre-existing `dnd.db` in the same location and say so once, rather than silently creating an empty store beside it.
+**Licensing baseline:** SRD 5.2 (released 22 April 2025, later 5.2.1) publishes the 2024 core mechanics under CC-BY-4.0. This is the safe surface for shipping rule *content* inside a product — spell text, item text, class tables. Anything outside the SRD (most subclasses, most named magic items, most backgrounds and species options) must be entered by the user or licensed separately. **This constraint shapes the schema more than any other single fact:** the tool cannot assume it owns a complete rules catalog, so character documents must survive with partial, user-supplied, or missing catalog entries.
 
 ---
 
-## 1. Purpose and scope
+## Part 0 — Design stance
 
-This is the second interface shipped for the Dungeon Master Open Source Toolkit, and the first aimed at the GM. Its job is narrow on purpose: **help a GM run a session at the table**, and in doing so, force us to build the player↔GM data exchange interface for real.
+You asked for two things explicitly: no DRY optimization, and no pre-optimization for access patterns. I'm taking both seriously, and the report argues for a schema that is *deliberately* redundant. Three things justify that, independent of performance:
 
-Everything else a GM might want — campaign prep, NPC and location databases, quest trackers, encounter building against a monster catalog — is out of scope for v0. Not because it's unimportant, but because we don't yet know which of those the toolkit should own, and each is a large, opinionated domain commitment. v0 exists to earn the right to make those commitments by putting something usable in front of GMs first.
+1. **A character sheet is a record of rulings, not a query over a rulebook.** The Longsword on a sheet is not "a pointer to Longsword"; it is "the longsword this DM let this player have, renamed *Dawnbreaker*, currently at 3 charges, with a house rule attached." Late-binding to a catalog row makes the sheet change when the catalog changes. That is a correctness bug, not a normalization win.
+2. **The 2024 rules are choice-heavy and mixed-source.** A single table routinely mixes 2014 subclasses, 2024 classes, third-party species, and homebrew. There is no authoritative catalog to normalize against.
+3. **Rules text is versioned and errata'd.** SRD version numbers increment (5.2 → 5.2.1 → …). A sheet built in 2025 should still render as it did in 2025.
 
-v0 is also deliberately the *cheapest* way to build the exchange layer. Players and GMs move data by exporting and importing files. There is no server, no discovery, no sockets. But the files are not ad-hoc dumps — they carry a versioned envelope (§6.1) designed from the start to be the message body a future LAN sync server sends over the wire. When the GM-hosted server lands, the transport changes and the payloads do not.
+So the governing pattern is **snapshot + provenance**: every embedded object carries a full copy of what it needs to render and resolve, *plus* a `source_ref` describing where it came from. Duplication is the point. Where I store both a raw input and a computed total, I store both — I do not require the reader to recompute, and I do not require the writer to trust the reader's math.
 
-**In scope for v0:**
+I use one aggregate root per character. Catalog documents (spell catalog, item catalog, species catalog) exist as separate collections, but they are **seed data**, not runtime dependencies.
 
-- Importing player character snapshots into a campaign (player → GM).
-- A live party board: read-only vitals, defenses, and passive scores for every party member.
-- An encounter runner: initiative order, round/turn advancement, HP and condition tracking, concentration tracking.
-- Awarding XP, currency, items, renown, and story features to party members during or after play.
-- A minimal, homebrew-first adversary store — enough to run a fight, not a monster catalog.
-- A session log that accumulates the consequences of play and exports them as per-character **patch packets** (GM → player) the character tool can apply.
-- Non-interactive commands for everything scriptable (§4).
+---
 
-**Out of scope for v0, named so the boundary is explicit:**
+## Part 1 — Character
 
-- Campaign prep of any kind: NPCs, locations, factions, quests, session notes, hooks, calendars.
-- Encounter *building* — difficulty budgets, XP thresholds, party-strength math. v0 runs an encounter the GM has already decided on.
-- Any bundled monster/spell/item catalog (§10.2).
-- Rules automation: no attack rolls, no damage calculation, no saving-throw resolution, no durations expiring on their own. The GM does the rules; the tool remembers the numbers.
-- The LAN sync server, discovery, auth, and conflict resolution.
-- Any GM authority over a character document. The player's copy is authoritative, always. The GM holds read-only snapshots and *proposes* changes as patches.
+### 1.1 What the 2024 rules changed
 
-## 2. Non-functional constraints
+**Ability scores no longer come from species.** In 2024 the ability score adjustment moved to *background*. Each background lists three ability scores; the player either raises one by 2 and another by 1, or raises all three by 1. Older backgrounds are converted by distributing the same 3 points; if you use an older species with an ASI, you ignore it. This is the single most schema-relevant change in character creation, because the allocation is now a *player decision with two legal shapes*, not a fixed species constant.
 
-Inherited wholesale from the character TUI spec §2: single static Go binary, usable at 80×24 with graceful degradation, works over SSH and inside tmux, no true-color or terminal-graphics dependencies, no network calls, no telemetry, sub-100ms startup.
+**Backgrounds also grant an Origin feat.** Each of the 16 PHB backgrounds bundles: three ability scores, an Origin feat, two skill proficiencies, one tool proficiency, and an equipment package (which can be traded for 50 gp). A custom background framework exists with the same five fixed slots, subject to DM approval. Older backgrounds that don't include a feat get a player-chosen Origin feat.
 
-Two constraints specific to this tool:
+**Feats are a first-class, four-category system:**
 
-**The GM binary never opens the character store.** `internal/gmstore` opens `campaign.db` and nothing else. There is no code path from `dmosh gm` to `dmosh.db`, enforced by package boundary rather than convention: the campaign store package has no dependency on the character store package, and the only way character data enters a campaign is `dmosh gm party import` reading a file. This is what makes the eventual client/server split a transport change rather than a rewrite.
-
-**Encounter state must survive a crash mid-fight.** Nothing about a session is reconstructible from memory once the table has moved on. Every mutation during an encounter commits synchronously (§8.3), not debounced the way the character editor's autosave is.
-
-## 3. Technology stack
-
-Identical to the character TUI spec §3 — same libraries, same idioms, shared internal packages where it makes sense.
-
-| Layer | Library | Role |
+| Category | When acquired | Notes |
 |---|---|---|
-| CLI framework | `spf13/cobra` | `dmosh gm ...` subcommand tree under the same root binary |
-| TUI runtime | `charmbracelet/bubbletea` | Elm-architecture loop for the session runner |
-| Component kit | `charmbracelet/bubbles` | `list`, `table`, `textinput`, `textarea`, `viewport`, `help`, `key` |
-| Structured forms | `charmbracelet/huh` | Campaign init, adversary entry, award forms, patch review |
-| Styling | `charmbracelet/lipgloss` | Layout and theming; shared `theme` package with the character TUI |
-| Markdown rendering | `charmbracelet/glamour` | Statblock text snapshots, session log rendering |
-| Logging | `charmbracelet/log` | File-based structured logging |
-| Schema validation | `santhosh-tekuri/jsonschema/v5` | Validates campaign documents, imported snapshots, adversary imports, emitted patches |
-| Persistence | `database/sql` + `modernc.org/sqlite` | Embedded document store, cgo-free for the static-binary requirement |
-| Demo/docs tooling | `charmbracelet/vhs` | Terminal recordings for docs |
+| Origin | Level 1, from background | 10 in the PHB; can also be taken later |
+| General | At ASI levels (4, 8, 12, 16; Fighter also 6 and 14; Rogue also 10) | Most grant a +1 to one ability score alongside a feature; many have a level-4 prerequisite; four are repeatable |
+| Fighting Style | Requires the Fighting Style feature (Fighter L1; Paladin/Ranger L2) | Now standalone feats rather than a nested class list |
+| Epic Boon | Level 19 only | Can push one ability score above 20, to a maximum of 30 |
 
-**No new dependencies in v0.** Notably absent and intentionally so: any HTTP or RPC library, any service-discovery library, any crypto/identity library. Those belong to the sync milestone, and pulling them in early invites network assumptions into a tool that shouldn't have them.
+Note the cap consequence: the ability-score ceiling is **not a constant**. It is 20 by default and 30 for scores raised by an Epic Boon.
 
-Shared `internal/` packages used by both subsystems: `theme`, the schema-validation wrapper, and `exchange` — which owns the envelope and the patch op vocabulary. The GM subsystem depends on `exchange` to *emit* ops, the character subsystem to *apply* them, and neither depends on the other; that package is the entire write-side contract between the two tools. There is deliberately **no shared `derive` package** (see §5.1). Struct generation from JSON Schema follows whatever the character tool settles on in its §12.1 spike.
+**Species carry no ability scores at all,** and instead give a trait package: creature type, size, speed, senses, and traits. Ten species in the PHB. Several have a mandatory sub-choice that gates traits: Elf picks one of three Lineages, Tiefling one of three Fiendish Legacies, Gnome one of two Lineages, Goliath one of six Giant Ancestries, Dragonborn one of ten Draconic Ancestries. Elf and Tiefling sub-choices grant a cantrip plus level-gated spells at character levels 3 and 5, which are always prepared, castable once per long rest without a slot, and whose spellcasting ability is *chosen by the player at selection time*. Half-Elf and Half-Orc are gone as species; mixed heritage is a descriptive option. Dwarves, gnomes, and halflings all moved to 30 ft speed; Wood Elf and Goliath sit at 35 ft.
 
-## 4. Command structure
+**Subclass timing is uniform:** every class chooses its subclass at level 3.
 
-```
-dmosh gm init [--name NAME] [--db PATH] [--force]         # create a campaign document + campaign.db
-dmosh gm party import <file>... [--db PATH]               # ingest character snapshot envelopes
-dmosh gm party refresh <member> <file>                    # replace one member's snapshot
-dmosh gm party list                                       # roster table, with a staleness column
-dmosh gm party manifest --out FILE                        # write a party_manifest envelope
-dmosh gm adversary add [--from FILE]                      # huh form, or non-interactive import
-dmosh gm adversary list
-dmosh gm encounter new [--name NAME] [--member M]... [--adversary ID[:N]]...
-dmosh gm encounter list
-dmosh gm run [<encounter>] [--db PATH]                    # session runner TUI
-dmosh gm session start|end [--number N]                   # end generates patches and opens review
-dmosh gm patch list [--session N] [--character X]
-dmosh gm patch export [--character X] [--session N] --out DIR [--force]
-dmosh gm show <thing> [--format text|markdown|json]
-dmosh gm validate [--all]
-dmosh gm export [--format json] --out FILE                # whole campaign document
-dmosh gm feedback --out FILE                              # local usage summary (§11)
-```
+**Exhaustion is now a simple stacking counter:** levels 1–6, each level applying −2 to d20 tests and −5 ft of speed, with death at level 6. It is explicitly the one condition whose effects worsen on reapplication; all other conditions are binary, and multiple instances each track their own duration but do not stack in effect.
 
-`<thing>` for `show` is one of `campaign`, `member <id>`, `adversary <id>`, `encounter <id>`, `session <n>`, `patch <id>`.
+**Inspiration became Heroic Inspiration:** expend to reroll any die immediately after rolling, taking the new result; gaining it while you already have it means it is lost unless you hand it to a player character who lacks it. So it is a boolean with a transfer operation, not a counter.
 
-`validate` with no arguments validates the campaign document. `--all` additionally validates every roster snapshot against the vendored character schema and every pending patch against the op vocabulary.
+**Other glossary-level facts worth encoding:** proficiency bonus scales +2 through +6 by total character level; carrying capacity is derived from Strength and size; a character may choose to fail a saving throw without rolling.
 
-**Which commands take over the terminal:** `run`, `session end`, bare `dmosh gm`, `adversary add` without `--from`, and `encounter new` without participant flags. Everything else prints and exits — including `adversary add --from FILE` and a fully-flagged `encounter new`, which exist precisely so a campaign can be built from a script or a fixture in CI.
+### 1.2 Schema argument
 
-**Exit codes**, matching the character tool's contract: `0` success; `1` validation failure, with failing JSON Pointer paths on stderr; `2` succeeded with warnings (schema skew, stale snapshots, skipped ops).
+The character block is where the redundancy pays off hardest. **Store every ability score as a structured object with its full derivation, not a number.** A 2024 character's Strength is the sum of a base value (from standard array, point buy, or rolls), a background allocation, zero or more feat/boon increases, and possibly a magic item override — and the legal maximum depends on whether an Epic Boon touched it. Collapsing that to `"str": 18` throws away the audit trail that lets the tool explain a number to a confused player, and it makes level-up recalculation a guess.
 
-Matching additions on the player side, specified here because they are half of the exchange interface but implemented in the `character` subsystem:
+**Store the build as an append-only decision log *and* as a materialized current state.** This is the most emphatically non-DRY choice in the document. The `build_log` records each choice as it was made (species chosen, background ASI split, subclass at level 3, feat at level 4, weapon masteries swapped after a long rest). The rest of the document is the resolved sheet. They will occasionally disagree after a rules errata; that disagreement is *information*, and the log is what makes respec, undo, and "why do I have this?" possible.
 
-```
-dmosh character export <name> --format snapshot --out FILE
-dmosh character patch preview <file>                      # no writes
-dmosh character patch apply <file>                        # interactive, per-op review
-dmosh character manifest apply <file>                     # sets campaign_id, nothing else
-```
+**Model species sub-choices as a first-class embedded object,** not a string. `"species": "Elf", "lineage": "Wood Elf"` is not enough, because the lineage grants spells at levels 3 and 5 with a player-chosen spellcasting ability and a free-cast-per-long-rest allowance. Those need to land in the spellcasting section as fully-formed prepared-spell entries with `always_prepared: true` and their own recharge tracking.
 
-`patch apply` is interactive by §6.3's mandate, which makes it the character subsystem's second interactive command after `new`/`open` — a companion edit to that spec's §4.
-
-Bare `dmosh gm` resolves the default campaign database (`--db PATH`, then `./campaign.db`, then `$XDG_DATA_HOME/dmosh/campaign.db`) and opens the session dashboard (§7.1).
-
-## 5. Data model
-
-### 5.1 What the campaign document holds
-
-v0 introduces `campaign.schema.json`, kept deliberately thin: an aggregate root stored as JSON text in a SQLite column, validated on every read and write.
-
-Top-level blocks:
-
-- `campaign` — id, name, ruleset revision (2024 default, matching the character schema's `ruleset.revision`), created/updated timestamps, `doc_revision`, `current_session_number`.
-- `roster[]` — one entry per party member (§5.1.1).
-- `adversaries[]` — statblock documents (§5.3).
-- `encounters[]` — definitions and run state (§5.2).
-- `sessions[]` — `session_number`, start/end timestamps, `events[]` (§5.4).
-- `outbound_patches[]` — generated patches with `status` (`pending` / `exported` / `acknowledged`), see §6.3.
-- `usage` — local counters for §11's feedback summary: `{screen_entries: {dashboard, party_board, runner, adversary_library, session_review}, sessions_run, encounters_run}`. Incremented on screen entry, flushed with the next mutation rather than synchronously — this is the one thing in the document that doesn't need §2's durability. It never leaves the machine.
-
-#### 5.1.1 Roster entries
-
-```
-{
-  member_id,                 // ULID, the campaign's stable handle for this player
-  display_name,
-  character_snapshot,        // full character document, verbatim, never edited
-  provenance: {
-    source_character_id,     // the snapshot's _id
-    source_doc_revision,     // the snapshot's doc_revision
-    imported_at,             // wall clock
-    imported_at_session,     // campaign.current_session_number at import; 0 before session 1
-    source_tool_version,
-    produced_by,             // from the envelope
-    schema_skew              // true if the snapshot's schema_version differs from the vendored one
-  },
-  import_history: [ { at, at_session, source_doc_revision, source_tool_version } ],
-  cached: { ... },           // derived fields lifted from the snapshot at import, with computed_at
-  party_state: {             // live between-fight state; see below
-    hp_current, hp_temp, conditions[], concentrating_on, updated_at
-  }
-}
-```
-
-`cached` holds what the party board needs without re-walking the snapshot: AC, HP max, passive Perception, save bonuses, speeds, defenses. These are **read out of the snapshot, not computed** — the GM tool does not reimplement the character tool's derive package, and there is no fallback. A derived field absent from a snapshot renders as `—` on the party board with the field named; the fix is a fresh snapshot, not a second implementation of the maths. This is why §3 lists no shared `derive` package.
-
-`party_state` is the live state of a party member *between* encounters, seeded at import from the snapshot's `vitals.hit_points.current` and `vitals.conditions`. The handoff rule: on encounter start, each party participant's `combat_state` initialises from `party_state`; on encounter end, `party_state` is written back from `combat_state`. Party-member HP is therefore tracked continuously across a session, and never written into the snapshot or sent anywhere (§6.3 emits no HP op).
-
-`imported_at_session` exists so staleness is measured in sessions rather than wall-clock days (§7.2, §12.1): a snapshot is stale when `campaign.current_session_number - provenance.imported_at_session >= 2`.
-
-### 5.2 Encounters and live state
-
-An encounter separates **definition** from **run state**, because the same encounter may be run, abandoned, and re-run.
-
-Definition:
-
-```
-{
-  encounter_id,
-  name,
-  status,                    // not_started | in_progress | complete | abandoned
-  participants: [ { participant_id,        // ULID, minted at creation or when added mid-fight
-                    kind,                  // party_member | adversary
-                    member_id,             // when kind == party_member
-                    adversary_id,          // when kind == adversary
-                    instance_label } ]     // "Bandit 3"; display only, not an identifier
-}
-```
-
-Every participant has a `participant_id` because nothing else identifies one: two instances of a statblock share an `adversary_id`, and `instance_label` is free text a GM will duplicate. `combat_state` is a map keyed by `participant_id`, `initiative_order[].participant_refs[]` holds `participant_id`s, and session events name a `participant_id` as their subject.
-
-Run state:
-
-```
-{
-  round, turn_index,
-  initiative_order: [ { count, tiebreak, label, participant_refs[] } ],
-  combat_state: { <participant_id>: { hp_current, hp_temp, conditions[],
-                                      concentrating_on, notes, is_active } }
-}
-```
-
-`conditions[]` uses the same enum as `character.schema.json` — not a parallel list. Adversary `hp_current` initialises from the statblock's `hp_max`, per instance. Dead, fled, and removed participants stay in the record with `is_active: false`.
-
-**Initiative entries can cover more than one participant.** An entry holds a list of refs, so eight bandits on one count are eight refs under a single entry — not eight entries that happen to share a number. Splitting one out (§7.3) is then moving a ref between entries rather than a resort.
-
-**Labels.** Each adversary instance gets an `instance_label` of `"<name> <n>"` at encounter creation — Bandit 1 through Bandit 8. A grouped entry's default `label` is `"<name> ×<count>"` — "Bandit ×8" — which is deliberately not an English plural: naive pluralisation produces "Wolfs" and "Octopuss", and the ×N form also stays correct as instances drop out. A split entry takes the instance's own label, so splitting the third bandit yields "Bandit 3" and leaves "Bandit ×7" behind. Every label is free text the GM can overwrite at any time with `r` — "Fleeing Bandit", "Boss Bandit" — and a renamed entry never has its label regenerated.
-
-`tiebreak` is an optional integer the GM types, DEX modifier by convention. Ordering is `count` descending, `tiebreak` descending, then insertion order ascending. That third key is what makes the order total when a split entry deliberately duplicates its parent's count *and* tiebreak (§7.3), so nothing needs a magic offset to stay deterministic. An entry with no `count` yet sorts last, below every filled entry (§7.3).
-
-**Status transitions.** `not_started` → `in_progress` the first time the GM leaves entry mode with at least one count filled (§7.3) — there is no discrete "setup finished" moment to hang it on, since blanks are legal and entry mode is re-enterable. `in_progress` → `complete` via `E` in the runner, with a `y`/`n` confirm, which also flushes `party_state` per §5.1.1. `Esc` leaves an encounter `in_progress` so it can be resumed. Starting an encounter that is already `in_progress` marks the previous run `abandoned` and clears its run state.
-
-### 5.3 Adversaries: minimal and homebrew-first
-
-`adversary.schema.json` is the smallest thing that lets a GM run a fight, plus an escape hatch. It is `$ref`'d from `campaign.schema.json`'s `adversaries[]` and compiled separately so `adversary add --from FILE` can validate a bare statblock — that file may hold one statblock or an array of them.
-
-- **Required:** `adversary_id`, `name`, `ac`, `hp_max`, `speeds`.
-- **Optional, structured:** ability scores, saves, resistances/immunities/vulnerabilities, condition immunities, senses, CR, `initiative_modifier`, `hp_formula`, `actions[]` (name, `to_hit`, `damage`, `save_dc`, short text), `legendary_actions[]`, `reactions[]`.
-- **Escape hatch:** `text_snapshot` — Glamour-rendered markdown for everything the structured fields don't capture.
-
-`initiative_modifier` and `hp_formula` are optional and **never used by the tool** — nothing rolls (§1). They are displayed in the detail pane as a reminder for a GM rolling by hand. Requiring them would be friction on the screen §5.3 is trying to keep frictionless.
-
-`content_origin` and `attribution_required` are carried on every adversary, matching the character schema's provenance fields. v0 ships **zero** bundled content; every statblock is authored by the GM or imported from a file they provide (§10.2, §10.3).
-
-### 5.4 Session events
-
-Every mutation during a session appends to `sessions[].events[]`. An event is:
-
-```
-{ event_id,        // ULID
-  kind,
-  at,
-  session_number,
-  encounter_id,    // null outside an encounter
-  round,           // null outside an encounter
-  subject,         // participant_id, plus member_id when the subject is a party member
-  payload }
-```
-
-`subject` carries `member_id` alongside `participant_id` so the patch fold can group by character without walking the encounter.
-
-The log is the source of truth for patch generation. Patches are not assembled by diffing state at session end; they are **folded from the log**, so the GM can inspect exactly why a patch says what it says, and a bug in the fold is a fixable pure function over data we still have.
-
-| Event kind | Folds to | Note |
-|---|---|---|
-| `xp_awarded` | `award_xp` | |
-| `currency_awarded` | `award_currency` | |
-| `item_awarded` | `grant_item` | |
-| `item_removed` | `remove_item` | |
-| `renown_awarded` | `award_renown` | |
-| `feature_granted` | `grant_feature` | |
-| `note` | `note` | |
-| `condition_applied` | `apply_condition` | Only if still active at session end |
-| `condition_removed` | — | Cancels its `condition_applied` |
-| `damage_taken` | — | Drives the runner and party board; never crosses the boundary (§6.3) |
-| `healing_received` | — | " |
-| `temp_hp_set` | — | " |
-| `concentration_set` | — | GM-side tracking only |
-| `concentration_broken` | — | " |
-| `participant_removed` | — | " |
-
-`remove_condition` has no folding event: a condition that ends *between* sessions is invisible to the current session's log. In v0 it is **manual-only**, added by the GM in the review screen (§7.5). Revisit if it turns out to be common.
-
-The event log is deliberately much richer than the patches folded from it — the GM needs the play-by-play, the player needs the consequences.
-
-## 6. The exchange interface
-
-This is the section v0 exists to build. Everything above is scaffolding for it.
-
-### 6.1 The envelope
-
-Every file crossing the player/GM boundary is a JSON document with the same envelope:
+**Conditions are a list of instances, not a set of flags** — each with its own source and duration, plus a `level` field used only by Exhaustion.
 
 ```json
 {
-  "envelope_version": "1",
-  "kind": "character_patch",
-  "payload_schema": "patch-ops.schema.json@1.0.0",
-  "message_id": "01JAV8QK3M4N5P6R7S8T9V0W1X",
-  "produced_at": "2026-08-17T19:40:00Z",
-  "produced_by": { "tool": "dmosh", "version": "0.3.1", "role": "gm" },
+  "_id": "char_7f3a91",
+  "doc_type": "character",
+  "schema_version": "1.0.0",
+  "ruleset": { "system": "dnd5e", "revision": "2024", "srd_baseline": "5.2.1" },
   "campaign_id": "camp_44b1",
-  "correlation": { "in_reply_to": null, "session_number": 21 },
-  "payload": { }
-}
-```
+  "owner_user_id": "usr_0091",
+  "created_at": "2026-08-10T14:02:00Z",
+  "updated_at": "2026-08-10T14:02:00Z",
+  "doc_revision": 41,
 
-`kind` is one of `character_snapshot`, `character_patch`, `party_manifest`. `produced_by.role` is `player` or `gm`. `campaign_id` may be null on a snapshot from a character not yet stamped with one. `payload_schema` is always `<schema-file>@<semver>`, matching the character document's own `schema_version` format — `character.schema.json@1.0.0` for a snapshot, `patch-ops.schema.json@1.0.0` for a patch.
+  "identity": {
+    "character_name": "Vesk Ambermarch",
+    "player_name": "Dana",
+    "pronouns": "she/her",
+    "alignment": "Chaotic Good",
+    "age": "31",
+    "height": "5'4\"",
+    "weight": "132 lb",
+    "faith": "Selûne",
+    "appearance": "Freeform text.",
+    "backstory": "Freeform text.",
+    "roleplay_notes": [
+      { "label": "Personality", "text": "Freeform. 2024 backgrounds no longer supply trait/ideal/bond/flaw tables." }
+    ],
+    "portrait_url": null
+  },
 
-The envelope is transport-shaped rather than file-shaped: `message_id`, `produced_at`, `produced_by`, `correlation`, and a discriminating `kind` are what a message needs when the same structure goes over a socket instead of a USB stick. When the LAN server lands, `POST /messages` takes this body unchanged and the file path stays as the offline fallback. Nothing in v0 produces a bare payload without an envelope.
+  "progression": {
+    "total_character_level": 7,
+    "experience_points": 23000,
+    "advancement_mode": "milestone",
+    "proficiency_bonus": 3,
+    "epic_boon_taken": false
+  },
 
-**The envelope is the single source for `campaign_id`, `session_number`, and the payload's schema version.** Payloads do not repeat them. A version mismatch warns and degrades; it does not silently mutate.
+  "abilities": {
+    "strength": {
+      "base_score": 10,
+      "base_source": "standard_array",
+      "background_increase": 0,
+      "feat_increases": [],
+      "other_increases": [],
+      "override_score": null,
+      "override_source": null,
+      "total_score": 10,
+      "modifier": 0,
+      "maximum_allowed": 20,
+      "save_proficient": false,
+      "save_bonus_total": 0,
+      "save_misc_bonus": 0
+    },
+    "dexterity": {
+      "base_score": 15, "base_source": "standard_array",
+      "background_increase": 1,
+      "feat_increases": [{ "feat_instance_id": "featinst_02", "feat_name": "Piercer", "amount": 1 }],
+      "other_increases": [],
+      "override_score": null, "override_source": null,
+      "total_score": 17, "modifier": 3,
+      "maximum_allowed": 20,
+      "save_proficient": true, "save_bonus_total": 6, "save_misc_bonus": 0
+    },
+    "constitution": { "base_score": 14, "base_source": "standard_array", "background_increase": 2, "feat_increases": [], "other_increases": [], "override_score": null, "override_source": null, "total_score": 16, "modifier": 3, "maximum_allowed": 20, "save_proficient": false, "save_bonus_total": 3, "save_misc_bonus": 0 },
+    "intelligence": { "base_score": 12, "base_source": "standard_array", "background_increase": 0, "feat_increases": [], "other_increases": [], "override_score": null, "override_source": null, "total_score": 12, "modifier": 1, "maximum_allowed": 20, "save_proficient": false, "save_bonus_total": 1, "save_misc_bonus": 0 },
+    "wisdom": { "base_score": 13, "base_source": "standard_array", "background_increase": 0, "feat_increases": [], "other_increases": [], "override_score": null, "override_source": null, "total_score": 13, "modifier": 1, "maximum_allowed": 20, "save_proficient": false, "save_bonus_total": 1, "save_misc_bonus": 0 },
+    "charisma": { "base_score": 8, "base_source": "standard_array", "background_increase": 0, "feat_increases": [], "other_increases": [], "override_score": null, "override_source": null, "total_score": 8, "modifier": -1, "maximum_allowed": 20, "save_proficient": false, "save_bonus_total": -1, "save_misc_bonus": 0 }
+  },
 
-### 6.2 Player → GM: `character_snapshot`
+  "ability_allocation": {
+    "generation_method": "standard_array",
+    "standard_array_assignment": { "15": "dexterity", "14": "constitution", "13": "wisdom", "12": "intelligence", "10": "strength", "8": "charisma" },
+    "point_buy_spend": null,
+    "rolled_values": null,
+    "background_allocation": {
+      "pattern": "2_and_1",
+      "allocations": [
+        { "ability": "constitution", "amount": 2 },
+        { "ability": "dexterity", "amount": 1 }
+      ],
+      "eligible_abilities": ["dexterity", "constitution", "wisdom"]
+    }
+  },
 
-Payload is a complete, unmodified `character.schema.json` document, produced by `dmosh character export --format snapshot` and consumed by `dmosh gm party import`.
+  "species": {
+    "instance_id": "spec_01",
+    "name": "Wood Elf",
+    "parent_species": "Elf",
+    "sub_choice": { "kind": "lineage", "label": "Lineage", "value": "Wood Elf" },
+    "creature_type": "Humanoid",
+    "size": "Medium",
+    "size_options": ["Medium"],
+    "base_walking_speed": 35,
+    "traits": [
+      { "trait_id": "trt_darkvision", "name": "Darkvision", "text_snapshot": "See in dim light within 60 feet as bright light, and in darkness as dim light.", "range_ft": 60 },
+      { "trait_id": "trt_fey_ancestry", "name": "Fey Ancestry", "text_snapshot": "Advantage on saves to avoid or end the Charmed condition." },
+      { "trait_id": "trt_trance", "name": "Trance", "text_snapshot": "Finish a Long Rest in 4 hours of trance." },
+      { "trait_id": "trt_keen_senses", "name": "Keen Senses", "text_snapshot": "Proficiency in Insight, Perception, or Survival (chosen)." , "player_choice": "Perception" }
+    ],
+    "granted_spell_refs": ["cast_lineage_cantrip", "cast_longstrider", "cast_pass_without_trace"],
+    "source_ref": { "catalog_id": "cat_species_wood_elf", "book": "PHB 2024", "page": 187, "is_homebrew": false, "srd_licensed": true }
+  },
 
-Import rules:
+  "background": {
+    "instance_id": "bg_01",
+    "name": "Wayfarer",
+    "ability_scores_offered": ["dexterity", "wisdom", "charisma"],
+    "origin_feat": { "feat_instance_id": "featinst_01", "name": "Lucky" },
+    "skill_proficiencies_granted": ["Insight", "Stealth"],
+    "tool_proficiency_granted": "Thieves' Tools",
+    "starting_equipment_choice": "package",
+    "starting_equipment_package": ["Thieves' Tools", "Gaming Set (Dice)", "Bedroll", "2 Pouches", "Traveler's Clothes", "16 GP"],
+    "starting_gold_alternative_gp": 50,
+    "is_custom": false,
+    "custom_definition": null,
+    "source_ref": { "catalog_id": "cat_bg_wayfarer", "book": "PHB 2024", "page": 183, "is_homebrew": false, "srd_licensed": false }
+  },
 
-- Each file in a batch succeeds or fails independently. Failures print to stderr; exit code is 1 if any failed.
-- Hard schema failure → rejected, with failing JSON Pointer paths.
-- **Schema skew** (the snapshot's `schema_version` differs from the vendored one) → imported with `provenance.schema_skew: true`. The party board marks the row, and any `cached` field the tool couldn't find renders as `—` (§5.1.1). Nothing about a snapshot is ever writable, so "read-only" would have meant nothing here.
-- A snapshot whose `_id` already exists in the roster → error naming `party refresh`.
-- Two members sharing a `display_name` → both import; `member_id` disambiguates and `party list` shows both.
-- An envelope naming a different `campaign_id` → warn and import.
-- `gm init` against an existing `campaign.db` → refuse unless `--force`.
+  "classes": [
+    {
+      "instance_id": "cls_01",
+      "class_name": "Ranger",
+      "class_level": 7,
+      "is_starting_class": true,
+      "hit_die": "d10",
+      "subclass": { "name": "Hunter", "chosen_at_level": 3, "source_ref": { "catalog_id": "cat_sub_hunter", "book": "PHB 2024", "is_homebrew": false } },
+      "saving_throw_proficiencies": ["strength", "dexterity"],
+      "primary_abilities": ["dexterity", "wisdom"],
+      "fighting_style_feat": { "feat_instance_id": "featinst_03", "name": "Archery" },
+      "weapon_mastery": {
+        "max_known": 2,
+        "swap_cadence": "long_rest",
+        "known": [
+          { "weapon_name": "Longbow", "mastery_property": "Slow" },
+          { "weapon_name": "Shortsword", "mastery_property": "Vex" }
+        ],
+        "last_swapped_at": "2026-08-09T08:00:00Z"
+      },
+      "spellcasting_ref": "spc_ranger"
+    }
+  ],
 
-`party refresh <member> <file>` replaces one member's snapshot and appends to `import_history[]`. `<member>` resolves as `member_id` first, then a case-insensitive unique `display_name` match; an ambiguous name errors and lists candidates. If the incoming `_id` differs from `provenance.source_character_id`, refuse: *"that snapshot is a different character (`chr_x` vs `chr_y`); use `party import` to add it as a new member."*
+  "features": [
+    {
+      "instance_id": "feat_ranger_favored_enemy",
+      "name": "Favored Enemy",
+      "origin": { "kind": "class", "ref": "cls_01", "level_gained": 1 },
+      "text_snapshot": "Hunter's Mark is always prepared; a number of free castings per Long Rest.",
+      "activation": { "type": "none" },
+      "linked_resource_id": "res_favored_enemy",
+      "source_ref": { "catalog_id": "cat_feat_favored_enemy", "book": "PHB 2024", "is_homebrew": false }
+    }
+  ],
 
-Sending whole documents rather than a reduced "GM view" is a v0 simplification with a real cost (the GM sees backstory and gold) and a real benefit (zero new schema). Whether players want redaction is a §11 feedback question.
+  "feats": [
+    {
+      "instance_id": "featinst_01",
+      "name": "Lucky",
+      "category": "origin",
+      "repeatable": false,
+      "times_taken": 1,
+      "acquired_at_level": 1,
+      "acquired_via": "background",
+      "ability_increase": null,
+      "prerequisite_snapshot": null,
+      "text_snapshot": "Spend Luck Points to gain Advantage or impose Disadvantage.",
+      "linked_resource_id": "res_luck_points",
+      "source_ref": { "catalog_id": "cat_feat_lucky", "book": "PHB 2024", "is_homebrew": false }
+    },
+    {
+      "instance_id": "featinst_02",
+      "name": "Piercer",
+      "category": "general",
+      "repeatable": false,
+      "times_taken": 1,
+      "acquired_at_level": 4,
+      "acquired_via": "asi_slot",
+      "ability_increase": { "ability": "dexterity", "amount": 1 },
+      "prerequisite_snapshot": "Level 4+",
+      "text_snapshot": "Reroll one damage die on a piercing hit; extra die on a crit.",
+      "linked_resource_id": null,
+      "source_ref": { "catalog_id": "cat_feat_piercer", "book": "PHB 2024", "is_homebrew": false }
+    }
+  ],
 
-### 6.3 GM → player: `character_patch`
+  "proficiencies": {
+    "armor": ["Light", "Medium", "Shields"],
+    "weapons": ["Simple", "Martial"],
+    "tools": [{ "name": "Thieves' Tools", "source": "background", "expertise": false }],
+    "languages": ["Common", "Elvish", "Sylvan"],
+    "skills": [
+      { "skill": "Perception", "ability": "wisdom", "proficient": true, "expertise": false, "misc_bonus": 0, "total_bonus": 4, "sources": ["species", "class"] },
+      { "skill": "Stealth", "ability": "dexterity", "proficient": true, "expertise": false, "misc_bonus": 0, "total_bonus": 6, "sources": ["background"] },
+      { "skill": "Survival", "ability": "wisdom", "proficient": true, "expertise": false, "misc_bonus": 0, "total_bonus": 4, "sources": ["class"] }
+    ]
+  },
 
-```json
-{
-  "patch_id": "01JAV8QK3M4N5P6R7S8T9V0W1X",
-  "target_character_id": "chr_7f3a91",
-  "observed_doc_revision": 14,
-  "summary": "Session 21: 2 encounters, 450 XP, 75 gp, 1 item",
-  "ops": [
-    { "op_id": "01JAV8QK4A...", "kind": "award_xp",
-      "amount": 450,
-      "reason": "Session 21 award", "source_event_ids": ["01JAV8Q..."] },
+  "vitals": {
+    "hit_points": { "maximum": 58, "current": 41, "temporary": 0, "maximum_modifier": 0, "hp_roll_mode": "average" },
+    "hit_dice_pools": [{ "die": "d10", "class_ref": "cls_01", "total": 7, "remaining": 5 }],
+    "death_saves": { "successes": 0, "failures": 0, "stabilized": false },
+    "heroic_inspiration": true,
+    "conditions": [
+      { "instance_id": "cond_01", "name": "Exhaustion", "level": 2, "source": "Forced march", "duration": { "kind": "until_long_rest" }, "applied_at": "2026-08-09T21:00:00Z", "effect_snapshot": "-4 to d20 tests; speed reduced by 10 ft." }
+    ],
+    "defenses": { "resistances": [], "immunities": [], "vulnerabilities": [], "condition_immunities": [] }
+  },
 
-    { "op_id": "01JAV8QK4B...", "kind": "award_currency",
-      "coins": { "gp": 75 }, "counterparty": "Bandit camp strongbox",
-      "reason": "Strongbox, split 4 ways", "source_event_ids": ["01JAV8Q..."] },
+  "combat": {
+    "armor_class": {
+      "total": 16,
+      "calculation": "medium_armor",
+      "breakdown": [
+        { "label": "Half Plate Armor", "value": 15 },
+        { "label": "Dexterity (capped at +2)", "value": 1 }
+      ],
+      "override": null
+    },
+    "initiative": { "ability": "dexterity", "bonus": 3, "misc_bonus": 0, "advantage": false },
+    "speeds": { "walk": 25, "fly": 0, "swim": 0, "climb": 0, "burrow": 0, "notes": "Base 35, reduced 10 by Exhaustion 2" },
+    "size": "Medium",
+    "creature_type": "Humanoid",
+    "senses": { "darkvision": 60, "blindsight": 0, "tremorsense": 0, "truesight": 0, "passive_perception": 14, "passive_investigation": 11, "passive_insight": 11 },
+    "attunement": { "slots_maximum": 3, "slots_used": 2 },
+    "carrying": { "capacity_lb": 150, "push_drag_lift_lb": 300, "encumbrance_variant_enabled": false, "current_weight_lb": 74.5 }
+  },
 
-    { "op_id": "01JAV8QK4C...", "kind": "grant_item",
-      "name": "Potion of Healing", "quantity": 2, "item_payload": null,
-      "reason": "Loot from the bridge fight", "source_event_ids": ["01JAV8Q..."] },
+  "resources": [
+    { "resource_id": "res_luck_points", "name": "Luck Points", "maximum": 3, "current": 1, "recharge": "long_rest", "source_feature": "featinst_01" },
+    { "resource_id": "res_favored_enemy", "name": "Hunter's Mark (free casts)", "maximum": 3, "current": 2, "recharge": "long_rest", "source_feature": "feat_ranger_favored_enemy" }
+  ],
 
-    { "op_id": "01JAV8QK4D...", "kind": "award_renown",
-      "group_ref": { "group_id": "grp_ee", "group_name": "Emerald Enclave" },
-      "delta": 2, "reason_category": "assigned_mission",
-      "reason": "Cleared the blightwood", "source_event_ids": ["01JAV8Q..."] },
+  "rest_state": {
+    "last_short_rest_at": "2026-08-10T11:15:00Z",
+    "last_long_rest_at": "2026-08-09T08:00:00Z",
+    "last_dawn_at": "2026-08-10T06:04:00Z",
+    "pending_long_rest_choices": ["swap_prepared_spell", "swap_weapon_mastery"]
+  },
 
-    { "op_id": "01JAV8QK4E...", "kind": "note",
-      "text": "The Consortium now knows you have the ruby.",
-      "source_event_ids": ["01JAV8Q..."] }
+  "build_log": [
+    { "seq": 1, "at": "2026-04-01T18:00:00Z", "level": 1, "decision": "species_selected", "payload": { "species": "Elf", "lineage": "Wood Elf" } },
+    { "seq": 2, "at": "2026-04-01T18:02:00Z", "level": 1, "decision": "background_selected", "payload": { "background": "Wayfarer", "ability_pattern": "2_and_1", "allocations": [{ "ability": "constitution", "amount": 2 }, { "ability": "dexterity", "amount": 1 }] } },
+    { "seq": 3, "at": "2026-05-11T19:30:00Z", "level": 3, "decision": "subclass_selected", "payload": { "class_ref": "cls_01", "subclass": "Hunter" } },
+    { "seq": 4, "at": "2026-06-02T19:10:00Z", "level": 4, "decision": "asi_slot_spent", "payload": { "choice": "feat", "feat": "Piercer" } }
   ]
 }
 ```
 
-`observed_doc_revision` is copied from the snapshot's `doc_revision` (stored as `provenance.source_doc_revision`, §5.1.1).
+---
 
-**Ops name intentions, not locations.** No op contains a JSON Pointer, a field name, or any other reference to the character document's shape. `award_xp` says a character earned 450 XP; where XP lives, whether the table uses milestone advancement and should ignore it, and what else must change as a consequence are the *receiver's* business. This buys three things:
+## Part 2 — Items & Consumables
 
-- **The character schema can move without breaking the GM tool.** Rename the XP field, restructure inventory, split currency — the character tool updates its own handlers and every existing patch file still applies.
-- **The receiver owns its own invariants.** Currency changes append to `/currency/ledger` and recompute `/currency/derived`; a granted item implies an item instance, an inventory entry, and a weight recompute. The character tool's `grant_item` handler does what its own add-item path does, derive pass and log append included. None of it is the patch's problem.
-- **The write-side contract stays small enough to publish later.** Nine op kinds, not "our character schema, which you must also implement." v0 makes no stability promise (§10.7); the point is that the contract is the right size and in the right place.
+### 2.1 What the 2024 rules require
 
-#### The v0 vocabulary
+**Weapon properties** are Ammunition, Finesse, Heavy, Light, Loading, Range, Reach, Thrown, Two-Handed, Versatile. Two changed meaningfully:
 
-| Kind | Payload | Notes |
-|---|---|---|
-| `award_xp` | `amount` | Receiver may no-op on milestone-advancement characters |
-| `award_currency` | `coins{cp,sp,ep,gp,pp}`, `counterparty` | Signed; never normalized |
-| `grant_item` | `name`, `quantity`, `item_payload` | `item_payload` is opaque — see below |
-| `remove_item` | `item_ref`, `quantity` | Consumed, stolen, destroyed |
-| `apply_condition` | `name`, `level`, `source`, `duration` | `name` uses the character schema's condition enum; `level` for Exhaustion only |
-| `remove_condition` | `name` | Manual-only in v0 (§5.4) |
-| `award_renown` | `group_ref`, `delta`, `reason_category` | See below |
-| `grant_feature` | `name`, `text_snapshot`, `source` | Story boons, charms, blessings |
-| `note` | `text` | No mechanical change; lands in the character log only |
+- **Heavy** no longer keys off creature size. You have Disadvantage on attack rolls with a Heavy weapon unless you have Strength 13+ (melee) or Dexterity 13+ (ranged). So the property carries a *numeric prerequisite that must be evaluated against the character*, not a static tag.
+- **Light** now itself carries the two-weapon fighting rule: attacking with a Light weapon during the Attack action lets you make one extra Bonus Action attack with a *different* Light weapon, with no positive ability modifier on that extra damage.
 
-Every op also carries `op_id` (ULID), a human-readable `reason`, and `source_event_ids`. An op the GM added by hand in the review screen has `source_event_ids: []` and renders as "manually added".
+**Weapon mastery** is the big structural addition. Every weapon in the PHB has exactly one mastery property from a set of eight: Cleave, Graze, Nick, Push, Sap, Slow, Topple, Vex. A character can only use it if they have mastered *that weapon type* (via a class feature or the Weapon Master feat) and are actually wielding it. Masteries are swappable after a long rest. Cleave and Nick are once-per-turn; the others have no usage cap; Topple is the one that forces a save (Constitution vs. Prone).
 
-**Reference shapes.** `item_ref` is `{entry_id, name}` and `group_ref` is `{group_id, group_name}`; the id may be null, the name may not, and at least one must resolve. Ids are copied verbatim from the snapshot the GM holds (`inventory.entries[].entry_id`, `reputation.groups[].group_id`). The receiver prefers the id, falls back to the name, and marks the op **unresolvable** in review if neither matches — never failing the patch, never guessing. Stale ids are expected: the GM's snapshot is by definition older than the document being patched.
+So the mastery property is a **property of the item**, while "which weapons I have mastered" is a **property of the character** — and the tool must join them at render time. Storing mastery only on the character breaks when a DM hands out an unusual weapon; storing it only on the item breaks the swap-after-long-rest rule.
 
-**`award_renown` specifics.** If the named group isn't on the character, the receiver offers to create it with `tracking_mode: score` and `renown_score: 0` before applying. A `delta` that would take the score below zero clamps to zero (the 2024 floor) and the review UI says so. `reason_category` is `advanced_interests | assigned_mission | significant_quest | downtime | offense | other`.
+**Magic items** use six rarity tiers (common, uncommon, rare, very rare, legendary, artifact), plus "varies" for items like Enspelled Armor whose rarity tracks the level of the bound spell. Attunement caps at three items, is established over a short rest, and can be ended voluntarily over another short rest — *unless the item is cursed*, in which case attunement can't be ended voluntarily until the curse is broken. Curses are not revealed by Identify. Attunement prerequisites may require a class, a species, or a spellcasting ability.
 
-**`award_currency` sign.** Negative values are legal and are how a GM records a cost paid at the table; the receiver appends an `expense` ledger entry for a negative total and `income` for a positive one. Mixed-sign coin maps within one op are rejected at validation.
+**Charges** are a per-item mutable counter with an item-specific recharge expression — commonly "regains 1d6 charges daily at dawn." Enspelled items carry 6 charges. A Wand of Magic Missiles can be used unattuned by anyone and spends 1–3 charges to scale the spell level. So charge state must live on the *instance*, and the recharge rule must live on the instance too (snapshotted), because dawn-based recharge doesn't fire on a rest event.
 
-**Free-text fields.** `apply_condition.duration`, `apply_condition.source`, and `grant_feature.source` are display strings, shown verbatim and never parsed — v0 expires nothing on its own (§1).
+**Consumables:** drinking a potion or administering it to a creature within 5 feet is a **Bonus Action** in 2024 (a widely-used house rule made official). Applying an oil may take longer per its description. Potions of Healing come in a rarity ladder with escalating dice. Potion mixing has a risk table. The PHB adds nonmagical crafting rules plus crafting for Potion of Healing and Spell Scrolls — meaning items can have a *provenance of "crafted"* with time and gold cost attached.
 
-**`grant_item.item_payload` is opaque.** It is `null`, or an arbitrary JSON object the GM tool stores, forwards, and displays by `name` but never inspects or constructs field-by-field; `patch-ops.schema.json` types it `{"type": ["object","null"]}` and stops. The receiver validates it against its own item schema on apply and rejects that single op with a readable reason if it doesn't fit. Typing it against the character domain's item schema would have reintroduced exactly the coupling semantic ops exist to remove. In practice `null` with a name and quantity is the common case; a populated payload is for a homebrew item the GM has already authored.
+### 2.2 Schema argument
 
-**What the vocabulary deliberately omits.** No HP op and no resource op. The rule: **the GM proposes what the GM knows and the player doesn't** — awards, loot, renown, story boons — *plus* state the GM's tool authoritatively tracked during a fight, which is why conditions stay. HP and class-resource spends fail both tests: the player watched them happen and tracks them on their own sheet. Tables that need the carryover use `note` ("you're at 19/34 going into next session"), and how often GMs write that note is §11.4's signal for which op earns its way in next.
+**Split the item model into a catalog document and an instance document, and let the instance carry a full copy of everything it needs.** The catalog entry is the platonic Longsword. The instance is *this* longsword. The instance embeds the rendered stat block — damage dice, properties, mastery, weight, rarity, attunement requirement, description text — so that deleting or editing the catalog row never mutates a live sheet.
 
-**Unknown kinds degrade, they don't fail.** A receiver meeting an op kind it doesn't know skips it with a visible warning — *"1 op skipped: unknown kind `award_downtime`; update your character tool"* — applies the rest, and records it `skipped` with `detail: "unknown kind"`, so re-applying the same file after an upgrade re-offers it.
+**Use a discriminated union on `item_type` with fully-written-out per-type field sets** rather than a lean generic item with an `attributes` bag. Under a no-DRY mandate this is the right call: a weapon document should literally have `damage_dice`, `damage_type`, `properties`, `mastery_property`, `range_normal_ft`, `range_long_ft`, `versatile_damage_dice`, `ammunition_type`. A consumable should literally have `on_use_action`, `effect_text`, `uses_remaining`. Sharing a bag between them makes validation impossible and forces every reader to know the union's shape anyway.
 
-**The cost, stated plainly.** The GM tool cannot express an arbitrary change. When the vocabulary doesn't cover something, the GM writes a `note` and says it in words — a real limitation, and the best instrument we have for knowing what to add (§11.4). A general escape hatch would have hidden that signal.
+**Model consumables as items with a `quantity` and an optional `uses` sub-object, not as a separate collection.** A stack of 7 potions and a wand with 4 charges are the same kind of problem — a countable resource attached to a physical object that lives somewhere in the inventory tree. Keeping them in one collection means the "spend a use" operation is uniform. What differs is only *what the count means*: `quantity` decrements to zero and the object disappears; `charges.current` decrements and the object stays.
 
-#### Patch lifecycle and identity
+**Represent Heavy's prerequisite as structured data**, not a string, so the tool can actually warn "you have Disadvantage with this." Same for attunement prerequisites.
 
-`session end` generates one patch per character from the event log, mints `patch_id` and every `op_id` **once**, and stores them in `outbound_patches[]` with `status: pending`. Review-screen edits (§7.5) mutate the stored ops in place, preserving every id; adding a manual op after export mints a new `op_id` inside the same `patch_id` and returns the patch to `pending`. `patch export` only serialises what's stored and flips `pending` → `exported`; re-exporting writes a byte-identical file. This is load-bearing — regenerating with fresh ULIDs would let a player apply 450 XP twice, the exact failure the design exists to prevent.
+```json
+{
+  "_id": "itm_9a04",
+  "doc_type": "item_instance",
+  "schema_version": "1.0.0",
+  "ruleset": { "system": "dnd5e", "revision": "2024" },
+  "owner_character_id": "char_7f3a91",
 
-`patch export` writes one file per character, `patch_<campaign>_s<session>_<member_id>.json`, into a directory the GM shares however they like. `--session` defaults to the most recently ended session; an existing file is refused without `--force`. `acknowledged` exists in the schema with no v0 mechanism to set it — acknowledgement is a sync-era concept, and the state machine shouldn't have to change shape later.
+  "item_type": "weapon",
+  "display_name": "Dawnbreaker",
+  "base_item_name": "Longbow",
+  "quantity": 1,
+  "weight_lb_each": 2,
+  "weight_lb_total": 2,
+  "value_gp_each": 50,
+  "is_magical": true,
+  "rarity": "rare",
+  "rarity_is_variable": false,
 
-#### Three properties make patches safe
+  "weapon": {
+    "category": "martial",
+    "range_type": "ranged",
+    "damage_dice": "1d8",
+    "damage_type": "Piercing",
+    "versatile_damage_dice": null,
+    "properties": ["Ammunition", "Heavy", "Two-Handed"],
+    "property_details": {
+      "heavy": { "melee_requires_strength": null, "ranged_requires_dexterity": 13 },
+      "ammunition": { "ammo_item_type": "Arrow", "range_normal_ft": 150, "range_long_ft": 600 },
+      "thrown": null,
+      "reach_ft": null,
+      "loading": false
+    },
+    "mastery_property": "Slow",
+    "mastery_text_snapshot": "On a damaging hit, reduce the target's Speed by 10 feet until the start of your next turn. Does not stack with itself.",
+    "attack_bonus_modifier": 1,
+    "damage_bonus_modifier": 1,
+    "ability_override": null
+  },
 
-**Idempotency, tracked per op.** Applying a patch appends one entry to the **character log** — the non-build log the character subsystem plans for quest rewards, XP, and permanent buffs:
+  "armor": null,
+  "consumable": null,
+  "container": null,
 
-```
-{ patch_id, campaign_id, session_number, applied_at, source_tool_version,
-  resolutions: [ { op_id, kind, status: applied|skipped|unresolvable, at, detail } ] }
-```
+  "attunement": {
+    "required": true,
+    "prerequisite": { "kind": "none", "value": null },
+    "is_attuned": true,
+    "attuned_at": "2026-07-04T09:00:00Z",
+    "attuned_by_character_id": "char_7f3a91"
+  },
 
-There is no `applied_patches` array; the log is the only record, so the two can't disagree. **This is a change to `character.schema.json`** — that document declares `additionalProperties: false` and today carries only `build_log`, whose enum covers build decisions. Adding the log and its `$defs` entry is owned by the character subsystem and is a Phase 1 dependency of this tool (§9).
+  "charges": {
+    "has_charges": true,
+    "maximum": 3,
+    "current": 2,
+    "recharge_expression": "1d3",
+    "recharge_trigger": "dawn",
+    "last_recharged_at": "2026-08-10T06:04:00Z",
+    "destroy_on_empty": false,
+    "destroy_on_empty_condition": null
+  },
 
-Re-applying the same file is therefore not a refusal but a **re-offer of the unresolved remainder**: `patch apply` scans the log for the `patch_id`, subtracts every op marked `applied`, and presents what's left — ops skipped last time, plus ops that were unresolvable then and may resolve now. Previously applied ops are never shown again. If nothing remains, the tool says so and exits cleanly. This matters because "I'll deal with the loot later" is the normal case: a player takes their XP and gold at the table and leaves four inventory ops until they're at a desk.
+  "curse": { "is_cursed": false, "curse_text_snapshot": null, "curse_revealed_to_player": false },
 
-**Advisory, not authoritative, revision.** `observed_doc_revision` records what the GM last saw. It does not gate application. If the player has edited since, the review UI says so and lets them decide. A patch that could be rejected on staleness would make the GM an authority over the player's document.
+  "sentience": { "is_sentient": false, "intelligence": null, "wisdom": null, "charisma": null, "alignment": null, "communication": null, "purpose": null },
 
-**Mandatory human review.** `patch apply` is interactive: every op renders as a before → after line with its `reason`, accepted or skipped **per op**. Partial application is a first-class outcome. There is no `--yes` flag in v0 — this is the schema report's "no silent mutation of a live sheet" applied to the exchange layer, and the cheapest answer to every trust question about letting someone else write to your sheet.
+  "activation": { "action_type": "none", "usage_limit": null, "save_dc": null, "save_ability": null },
 
-### 6.4 GM → players: `party_manifest`
+  "description_snapshot": "A yewwood longbow chased with silver. Its arrows trail motes of dawnlight.",
+  "mechanical_text_snapshot": "You have a +1 bonus to attack and damage rolls made with this magic weapon. Expend 1 charge to make the arrow deal an extra 2d6 Radiant damage.",
+  "notes_player": "DM ruled the radiant rider works on Graze misses too. Session 14.",
+  "house_rules": [{ "at": "2026-07-04", "ruled_by": "DM", "text": "Radiant rider applies on Graze." }],
 
-A small payload naming the campaign, its `campaign_id`, ruleset revision, and roster display names. Written by `dmosh gm party manifest --out FILE`, consumed by `dmosh character manifest apply <file>`, which sets `campaign_id` on the character and nothing else. Its v0 job is making future player exports self-address; it also proves the multi-recipient broadcast shape before the server needs it.
+  "provenance": {
+    "acquired_via": "loot",
+    "acquired_at": "2026-07-04T09:00:00Z",
+    "acquired_from": "Barrow of the Pale Wardens",
+    "crafting": null,
+    "identified": true,
+    "identified_at": "2026-07-04T20:00:00Z"
+  },
 
-## 7. Screen inventory
-
-Five screens. The character tool needed eleven because it models a whole paper sheet; a session runner is one dense screen plus support.
-
-### 7.1 Session dashboard (home)
-
-Campaign name and current session number; a party strip (name, class/level, HP bar from `party_state`, active conditions, stale-snapshot count); encounters with `status`; a footer showing pending patch count. If a session is open and an encounter is `in_progress`, `Enter` resumes it from anywhere — the tool's most common action should be one key from the top.
-
-`w` opens the **award form** (§7.2), reachable here so a GM can award between encounters without leaving the dashboard.
-
-### 7.2 Party board
-
-One expandable row per member. Collapsed: name, AC, HP current/max, passive Perception, active conditions, concentration. Expanded: saves, the skills a GM actually calls for (Perception, Insight, Stealth, Investigation) as passive and modifier, speeds, defenses, senses, languages, and the character's `identity.roleplay_notes[]` if present. Read-only and styled as such, with import time and `doc_revision` in the footer.
-
-**Stale snapshots are flagged, not just dated.** A row stale by §5.1.1's rule carries an inline marker — "imported 3 sessions ago" in the warning style — and `dmosh gm party list` shows the same flag in a column, so a GM can check before play without opening the TUI. The failure mode is quiet: a GM reads an AC that changed two levels ago and rules against a player on it. The nudge never blocks and never auto-refreshes; the GM's copy changes only when a player sends a new snapshot.
-
-Write paths on this screen:
-
-- `d`/`h`/`t` — damage, healing, temp HP against `party_state` outside combat, appending events.
-- `c` — apply/remove a condition.
-- `w` — the **award form**: a `huh` sequence of award kind (XP / currency / item / renown / feature / note), recipients (multi-select over the roster, defaulting to all), the kind's fields, and a reason. It writes **one event per recipient**, which is what makes §6.3's worked example producible: without it, nothing in the tool emits `xp_awarded`, `currency_awarded`, or `item_awarded` at all.
-
-### 7.3 Encounter runner
-
-The core screen and the one worth prototyping first. Three panes at wide terminals, stacking to one at 80 columns:
-
-- **Initiative pane** (left): the ordered list, current turn highlighted, round counter on top.
-- **Detail pane** (right): the selected combatant — statblock with actions and `text_snapshot` for adversaries, the party board's read-only vitals for members.
-- **Action bar** (bottom): `d` damage, `h` heal, `t` temp HP, `c` toggle condition (filtered picker over the condition enum, Exhaustion taking a level), `k` concentration set/break, `x` mark removed/dead, `Space` note, `w` award.
-
-Every action appends a session event and commits synchronously. Damage entry is a bare number field with `-`/`+` — this input happens dozens of times per fight, and friction here is the whole product's friction.
-
-**Initiative is typed in, never rolled.** Players roll their own initiative — the same line §1 draws around rules automation. **Instances of the same statblock share one count by default**: eight bandits act together on one entry, which is standard table practice and keeps the pane readable at 80 columns.
-
-**Entry happens in any order.** Encounter start puts the initiative pane into *entry mode* rather than running a wizard: every row is editable, the GM moves between them freely, and a header counts how many are still blank. This is not a keystroke optimisation — it's the only shape that matches a table, where numbers arrive in whatever order people speak up rather than in roster order. "Dana, what did you get?" — "17" — and the GM types it against Dana's row wherever it sits.
-
-Blanks are legal. An encounter can start with rows unfilled; a blank sorts last, renders as `—`, and can be filled at any point, which is what a late arrival or a distracted player actually looks like. Entry mode is left with `Esc` and re-entered with `i`, so correcting a number mid-fight is the same interaction as entering it — there is no separate setup phase to be outside of.
-
-Navigation and edge rules, all of which an implementer would otherwise have to invent:
-
-- `n`/`p` advance and rewind the turn. Rewind matters because tables reorder and correct constantly. `p` at round 1, turn 0 is a no-op with a status-line message.
-- `n` skips entries whose participants are all `is_active: false`.
-- `i` enters entry mode on the selected row; on a grouped entry it moves the whole group.
-- `s` splits the selected instance onto its own entry at the parent's `count` and `tiebreak`, then selects it with the count field focused and pre-filled. `Enter` accepts the parent's number, typing overrides it — a conservative default with a zero-friction override, rather than a choice between the two. No magic offset is needed to keep the order deterministic: §5.2's third sort key is insertion order, and the split entry was inserted later, so it lands after its parent.
-- `r` renames the selected entry.
-- `a` adds a combatant mid-fight at a typed count; it acts this round only if its count sorts below the current turn's.
-- `x` on the *current* participant advances to the next entry.
-- `E` ends the encounter with a `y`/`n` confirm, writing `status: complete` and flushing `party_state` (§5.1.1).
-- `Esc` exits entry mode when in it, and otherwise navigates back, leaving the encounter `in_progress` for later resumption. Ending an encounter is always deliberate; nothing completes an encounter by walking away from it.
-
-Concentration is a prompt, not automation: when a concentrating combatant takes damage, the tool surfaces "Concentration check: DC 10 or half damage (DC 12)" and waits. It computes the DC because that's arithmetic; it does not roll, resolve, or drop concentration.
-
-### 7.4 Adversary library
-
-A Bubbles `list` of statblocks with a Glamour detail pane, plus a `huh` form for add/edit and import from JSON. Nothing more: no cross-source search, no catalog, no CR filtering worth the name.
-
-### 7.5 Session review & patch queue
-
-Reached by `dmosh gm session end` or from the dashboard. Left pane: the session event log grouped by character. Right pane: the generated patch for the selected character, op by op, each showing its source events.
-
-The GM can edit an op's `reason`, drop an op (a death the party healed back, a loot award that got re-split), or add a manual op — a `huh` form whose first field picks from the §6.3 vocabulary, the rest generated per kind. All edits mutate stored ops in place, preserving ids (§6.3). This is where the GM's judgment lands before anything reaches a player, and it's why the fold has to be inspectable rather than clever.
-
-## 8. Cross-cutting behaviors
-
-### 8.1 Validation
-
-Four schemas compile at startup: `campaign.schema.json`, `adversary.schema.json`, a vendored copy of `character.schema.json` (for imports), and `patch-ops.schema.json` (for emitted patches). Snapshots validate before entering the roster, adversary imports before insertion, patches before export, and the campaign document on every save.
-
-The GM tool validates against the character schema **only on the read path** — a direct consequence of §6.3, and a useful check that the decoupling holds: if it ever needs that schema to write something, the vocabulary is missing an op.
-
-A validation failure on import is a rejection with JSON Pointer detail, not the character tool's read-only-open fallback — an unparseable party member is not something a session degrades into gracefully.
-
-### 8.2 Keybindings
-
-Inherits the character tool's §8.4 conventions: `?` for context help, `Esc` back, `Ctrl+S` save, inline `y`/`n` confirms for destructive actions, per-screen `key.Binding` sets generating the help overlay. The encounter runner is the one place where speed beats consistency and single unmodified letters are spent freely.
-
-### 8.3 Persistence
-
-Same storage shape as the character tool §9: SQLite, one document per row as JSON text, generated columns for anything a list query needs, numbered embedded migrations.
-
-```sql
-CREATE TABLE campaign (
-    id             TEXT PRIMARY KEY,
-    document       TEXT NOT NULL,
-    schema_version TEXT NOT NULL,
-    doc_revision   INTEGER NOT NULL DEFAULT 0,
-    created_at     TEXT NOT NULL,
-    updated_at     TEXT NOT NULL,
-    campaign_name  TEXT GENERATED ALWAYS AS (json_extract(document, '$.campaign.name')) STORED
-);
-
-CREATE TABLE schema_migrations (
-    version    INTEGER PRIMARY KEY,
-    applied_at TEXT NOT NULL
-);
+  "source_ref": {
+    "catalog_id": null,
+    "book": "Homebrew",
+    "page": null,
+    "is_homebrew": true,
+    "srd_licensed": false,
+    "authored_by_user_id": "usr_dm_0031"
+  }
+}
 ```
 
-One campaign per database file in v0 — a table holding one row looks odd, but it keeps many-campaigns-per-file open without committing to the UI that would need.
+A consumable instance, same collection, different discriminant:
 
-Encounter mutations commit immediately rather than on the character editor's 2-second debounce (§2). WAL mode is on by default, unlike the character tool's §12.6 default, because `gm show`/`validate` running against a database the runner has open is a normal GM workflow.
+```json
+{
+  "_id": "itm_c118",
+  "doc_type": "item_instance",
+  "item_type": "consumable",
+  "display_name": "Potion of Greater Healing",
+  "base_item_name": "Potion of Greater Healing",
+  "quantity": 3,
+  "weight_lb_each": 0.5,
+  "weight_lb_total": 1.5,
+  "value_gp_each": 100,
+  "is_magical": true,
+  "rarity": "uncommon",
 
-`dmosh gm export --format json` writes the whole campaign document to a file, so nothing is trapped inside a database.
+  "consumable": {
+    "consumable_kind": "potion",
+    "on_use_action": "bonus_action",
+    "can_administer_to_other": true,
+    "administer_range_ft": 5,
+    "effect_kind": "healing",
+    "healing_expression": "4d4 + 4",
+    "damage_expression": null,
+    "applies_condition": null,
+    "duration": { "kind": "instantaneous" },
+    "consumed_on_use": true,
+    "mixing_risk_applies": true
+  },
 
-## 9. Phased delivery
+  "weapon": null, "armor": null, "container": null,
+  "attunement": { "required": false, "prerequisite": null, "is_attuned": false },
+  "charges": { "has_charges": false },
+  "curse": { "is_cursed": false },
 
-**Phase 1 — the exchange spine.** `gm init`, `party import`, `party list`, the party board and award form (§7.2), character-side `export --format snapshot`, and the patch path end to end: `patch export`, `character patch preview`, `character patch apply`.
+  "description_snapshot": "Red liquid that glimmers when agitated.",
+  "provenance": {
+    "acquired_via": "crafted",
+    "crafting": { "tool": "Herbalism Kit", "days_spent": 3, "gp_spent": 50, "crafted_by": "self" },
+    "acquired_at": "2026-07-20T00:00:00Z",
+    "identified": true
+  },
+  "source_ref": { "catalog_id": "cat_item_potion_greater_healing", "book": "PHB 2024", "is_homebrew": false, "srd_licensed": true }
+}
+```
 
-Two dependencies gate this phase, both on the character subsystem:
+---
 
-1. **The character log** (§6.3) must exist, since idempotency has nowhere to live without it.
-2. **Only five of nine ops have a receiving surface in the character tool's own Phase 1** — `award_xp`, `award_currency`, `apply_condition`, `remove_condition`, `note`. `grant_item`, `remove_item`, and `grant_feature` need its Phase 2 screens; `award_renown` needs reputation, which that spec puts out of v1 scope entirely. The GM side emits all nine correctly; the remaining four land as `unresolvable` until those screens exist, and the re-offer mechanism (§6.3) means they apply later without the GM regenerating anything. Plan Phase 1 acceptance against the five, not the nine.
+## Part 3 — Inventory
 
-**Phase 2 — the runner.** Encounter definition, adversary library, the runner screen, session events, real patch folding. This is where the interaction-design risk lives.
+### 3.1 What the rules require
 
-**Phase 3 — review polish.** The patch queue's editing affordances, `party_manifest`, campaign export/import.
+Inventory in 2024 is governed by a handful of interacting rules:
 
-Sync, prep, and everything in §1's out-of-scope list wait for §11's feedback.
+- **Carrying capacity** is derived from Strength score and size; the same table gives the push/drag/lift figure. Encumbrance remains a variant, so the tool must support "weight is tracked but not enforced."
+- **Containers nest**, and some of them break the physics: a Bag of Holding's contents do not count toward the carrier's load in the normal way. So weight rolls up through the tree *unless a container declares otherwise*.
+- **Equipped state is not the same as carried state.** The 2024 rules are generous about drawing and stowing — you can equip or unequip a weapon before or after any attack in the Attack action, and there's still one free object interaction per turn. But the mastery rules require you to be *wielding* the weapon, not merely carrying it, and the Light property requires two different Light weapons actually in hand. Hands are a real, scarce, rules-relevant resource.
+- **Attunement** is a character-level cap of 3 that is satisfied by items in the inventory. The count must be derivable but should also be stored.
+- **Coins have weight**: 50 coins of any type weigh 1 pound. So currency contributes to encumbrance and must be reachable from the weight calculation.
+- **Ammunition** is consumed and partially recovered, so it is a stack with its own semantics.
 
-## 10. Choices this document deliberately does not make
+### 3.2 Schema argument
 
-Recorded so that "we haven't decided" reads as a decision rather than an oversight:
+**Store the inventory as a tree of containers with explicit parent references on each item, and store the resolved location path on the item as well.** Yes, that duplicates. The parent pointer is the source of truth for moves; the denormalized path is what makes a rendered sheet self-explanatory and what survives a container being deleted mid-session.
 
-1. **Whether the toolkit owns campaign prep at all.** A bad prep model is stickier than no prep model.
-2. **Content licensing and bundled catalogs.** SRD 5.2 under CC-BY-4.0 makes a bundled adversary catalog legally possible, at the cost of attribution obligations and a content pipeline. Homebrew-first defers it.
-3. **Statblock fidelity.** §5.3's minimal shape plus `text_snapshot` is a probe, not a model — we don't yet know whether GMs author statblocks here or keep a PDF open and need only AC and HP.
-4. **Whether the GM ever holds authoritative state.** v0's answer is a hard no. The sync milestone might want the GM authoritative for *party-level* documents — treasury, shared loot, party renown — which the schema report flagged as wanting their own aggregate root. v0 creates no party aggregate, so it stays open.
-5. **Sync transport, discovery, and identity.** The envelope constrains payloads and nothing else.
-6. **Redacted export profiles.** §6.2 sends whole character documents; whether players want to withhold parts is a §11 question.
-7. **Any stability guarantee on the op vocabulary.** No compatibility promise, no deprecation policy, no commitment that an op kind means the same thing next month — it should churn as §11.4's feedback arrives, and freezing it now freezes in our guesses. The one forward-compatibility d v0 does implement is unknown-kind skipping, because it costs nothing. Revisit when the op list stops changing between releases, which is itself the signal the domain is understood well enough to publish.
+**Model equipment slots explicitly and separately from containment.** An item is *somewhere* (backpack, chest at the inn, on the ground) and it may *also* be equipped (main hand, off hand, worn armor, attuned). Conflating the two forces awkward hacks like a fake "equipped" container. Hands in particular should be modeled as a two-element array, because the 2024 Light/Nick rules and free-object-interaction rules are hand-count-sensitive.
 
-## 11. What v0 is built to find out
+**Keep a separate `inventory_summary` block with precomputed totals** — total weight, attunement slots used, encumbrance tier. This is redundant with the item list by construction. It is also the thing a DM asks about mid-session, and recomputing it correctly requires knowing every container's weight exemption rules. Store it, timestamp it, and recompute on write.
 
-There's no telemetry, so feedback is a deliberate artifact. `dmosh gm feedback --out FILE` writes a local, reviewable markdown summary from the campaign document's `usage` block (§5.1) and its own contents — sessions and encounters run, average combatants, screen entries, patches generated and of which op kinds, how many statblocks used only `text_snapshot`, and the text of `note` ops. The GM reads it in full and chooses whether to share it. Nothing leaves the machine on its own.
+**Support out-of-body storage.** Items stashed at a bastion, in a vault, on a mount, or in the party's shared cart are inventory the player still wants to see. A `storage_location` enum with `carried | stowed_elsewhere | party_shared | lost | consumed` prevents these becoming ghost items.
 
-The README carries the questions v0 is designed to answer:
+```json
+{
+  "inventory": {
+    "summary": {
+      "total_weight_lb": 74.5,
+      "carried_weight_lb": 74.5,
+      "coin_weight_lb": 3.6,
+      "carrying_capacity_lb": 150,
+      "push_drag_lift_lb": 300,
+      "encumbrance_variant_enabled": false,
+      "encumbrance_tier": "unencumbered",
+      "attunement_slots_maximum": 3,
+      "attunement_slots_used": 2,
+      "computed_at": "2026-08-10T14:02:00Z"
+    },
 
-1. Do GMs run combat in a terminal at all, or is the party board the whole value?
-2. Is file-based exchange tolerable in practice, or does the friction show up before we ship sync? Specifically: does the GM ask for fresh snapshots mid-campaign, and do they arrive?
-3. Is per-op review the right granularity, or do players want "accept all" after the first session of trust?
-4. **Which ops get used, and what's missing?** `note` is the instrument: every time a GM writes a note describing a mechanical change instead of using an op, that's a missing entry in the vocabulary in the GM's own words.
-5. Do GMs author statblocks here, or enter a name, AC, and HP and keep a PDF open?
-6. Does the read-only-snapshot boundary hold, or is there a category of change GMs expect to make directly to a character?
-7. Do players want to redact anything before sending a snapshot?
+    "containers": [
+      {
+        "container_instance_id": "cnt_body",
+        "name": "Worn / Carried",
+        "container_kind": "person",
+        "parent_container_id": null,
+        "capacity_lb": null,
+        "capacity_cubic_ft": null,
+        "contents_are_weightless_to_carrier": false,
+        "is_extradimensional": false
+      },
+      {
+        "container_instance_id": "cnt_bp01",
+        "name": "Backpack",
+        "container_kind": "backpack",
+        "parent_container_id": "cnt_body",
+        "capacity_lb": 30,
+        "capacity_cubic_ft": 1,
+        "own_weight_lb": 5,
+        "contents_are_weightless_to_carrier": false,
+        "is_extradimensional": false
+      },
+      {
+        "container_instance_id": "cnt_boh01",
+        "name": "Bag of Holding",
+        "container_kind": "magic_bag",
+        "parent_container_id": "cnt_body",
+        "capacity_lb": 500,
+        "capacity_cubic_ft": 64,
+        "own_weight_lb": 15,
+        "contents_are_weightless_to_carrier": true,
+        "is_extradimensional": true,
+        "overload_behavior_snapshot": "Exceeding capacity or piercing the bag destroys it and scatters contents in the Astral Plane."
+      },
+      {
+        "container_instance_id": "cnt_vault",
+        "name": "Strongbox at the Rusted Anchor",
+        "container_kind": "offsite_storage",
+        "parent_container_id": null,
+        "capacity_lb": null,
+        "contents_are_weightless_to_carrier": true,
+        "is_extradimensional": false
+      }
+    ],
 
-Question 2 is load-bearing. If file exchange proves fine for a whole campaign, sync drops down the roadmap and Phase 3 becomes prep. If it breaks down in week two, sync is next — and the payload formats are already built and exercised.
+    "entries": [
+      {
+        "entry_id": "inv_001",
+        "item_instance_id": "itm_9a04",
+        "item_name_cache": "Dawnbreaker (Longbow +1)",
+        "quantity": 1,
+        "weight_lb_total": 2,
+        "storage_location": "carried",
+        "parent_container_id": "cnt_body",
+        "location_path_cache": ["Worn / Carried"],
+        "equipped": {
+          "is_equipped": true,
+          "slot": "hands",
+          "hands_used": 2,
+          "is_attuned": true,
+          "is_wielded_for_mastery": true
+        },
+        "sort_order": 10,
+        "is_favorite": true,
+        "added_at": "2026-07-04T09:00:00Z"
+      },
+      {
+        "entry_id": "inv_002",
+        "item_instance_id": "itm_c118",
+        "item_name_cache": "Potion of Greater Healing",
+        "quantity": 3,
+        "weight_lb_total": 1.5,
+        "storage_location": "carried",
+        "parent_container_id": "cnt_bp01",
+        "location_path_cache": ["Worn / Carried", "Backpack"],
+        "equipped": { "is_equipped": false, "slot": null, "hands_used": 0, "is_attuned": false },
+        "sort_order": 40,
+        "is_favorite": true,
+        "added_at": "2026-07-20T00:00:00Z"
+      },
+      {
+        "entry_id": "inv_003",
+        "item_instance_id": "itm_ammo_arrow",
+        "item_name_cache": "Arrows",
+        "quantity": 47,
+        "quantity_expended_this_session": 13,
+        "quantity_recoverable": 6,
+        "weight_lb_total": 2.35,
+        "storage_location": "carried",
+        "parent_container_id": "cnt_body",
+        "location_path_cache": ["Worn / Carried"],
+        "equipped": { "is_equipped": true, "slot": "quiver", "hands_used": 0, "is_attuned": false },
+        "sort_order": 15
+      }
+    ],
 
-## 12. Open questions
+    "equipment_slots": {
+      "hands": [{ "slot_index": 0, "entry_id": "inv_001" }, { "slot_index": 1, "entry_id": "inv_001" }],
+      "armor": { "entry_id": "inv_010" },
+      "shield": { "entry_id": null },
+      "head": { "entry_id": null },
+      "neck": { "entry_id": "inv_011" },
+      "cloak": { "entry_id": null },
+      "hands_wear": { "entry_id": null },
+      "rings": [{ "slot_index": 0, "entry_id": "inv_012" }, { "slot_index": 1, "entry_id": null }],
+      "feet": { "entry_id": null },
+      "belt": { "entry_id": null },
+      "custom_slots": []
+    },
 
-One, and it doesn't gate anything.
+    "transaction_log": [
+      { "seq": 88, "at": "2026-08-10T13:10:00Z", "kind": "consumed", "entry_id": "inv_002", "delta": -1, "note": "Used on Brannic after the ogre." },
+      { "seq": 87, "at": "2026-08-10T12:44:00Z", "kind": "expended", "entry_id": "inv_003", "delta": -13, "note": "Combat: bridge ambush." }
+    ]
+  }
+}
+```
 
-1. **The staleness threshold.** §5.1.1 flags a snapshot stale at two sessions since import. Sessions is the right unit — wall-clock days is wrong for a group that plays monthly, and `doc_revision` delta would be accurate but is unobservable to the GM without the very snapshot they're trying to prompt for. The `2` is a placeholder: too low and the marker is always on and becomes wallpaper, too high and it stops preventing the bad ruling it exists to prevent. Set it once someone has run a campaign and can say when they actually felt misled. If the session proxy turns out to be noisy, the obvious refinement is counting patches exported since import — the GM caused those changes, so it's a certainty rather than a guess — but that's a second measure for a problem v0 hasn't yet shown it has.
+---
+
+## Part 4 — Spells
+
+### 4.1 What the 2024 rules changed
+
+**Every spellcasting class now uses prepared spells.** The known/prepared split is gone. Each class states how many spells it can have prepared (a fixed number from the class table, no longer ability-modifier + level) and how often it can swap. The cadences differ per class and are a genuine schema requirement:
+
+- Wizard prepares from the spellbook and can change the whole prepared list on a long rest; the Memorize Spell feature also allows a swap on a short rest.
+- Ranger swaps one prepared spell per long rest.
+- Wizard can also replace a known cantrip on a long rest — a wizard-only capability.
+
+**Warlocks still use Pact Magic**, a separate slot pool that recharges on a short rest. That, plus multiclassing, means a character can hold **more than one distinct slot pool simultaneously**. A single `spell_slots[1..9]` array is the classic modeling mistake here.
+
+**Spells cast from non-class sources are common and structurally different.** Species lineages/legacies grant spells at levels 3 and 5 that are always prepared, castable once per long rest without expending a slot, castable normally with slots, and use a spellcasting ability the player picked when choosing the lineage. Feats (Magic Initiate), subclass features, and magic items all do similar things. These are not "prepared spells" in the class sense and must not consume prepared-count budget.
+
+**Rituals** were formalized: a ritual-tagged spell can be cast at +10 minutes without expending a slot, and normally requires the spell to be prepared — with class features like the Wizard's Ritual Adept explicitly waiving that. The ritual tag moved into the casting time line.
+
+**Other structural facts:** casting times of 1 minute or more require the Magic action each turn plus Concentration; casting up-cast means the spell simply takes on the slot's level; there are about 391 spells; emanation is a new area-of-effect shape; and healing spells were rebalanced (Cure Wounds to 2d8 + modifier, Healing Word 2d4 + modifier).
+
+### 4.2 Schema argument
+
+**Model spellcasting as an array of per-source blocks, not as one object on the character.** A Wizard 5 / Warlock 3 has two prepared lists, two preparation rules, two spellcasting abilities, two save DCs, and two slot pools with different recharge triggers. A single-object model forces every consumer into special cases.
+
+**Model slot pools as a list of named pools, each with its own recharge trigger and its own level→count map.** This handles the multiclass spellcaster table, Pact Magic, and one-off pools (like an item that grants slots) with the same shape.
+
+**Give every spell on the sheet a `preparation` object describing *why* it's there.** The five practical origins — prepared from class list, always-prepared from a class feature, granted by species/feat/item, in-spellbook-but-unprepared, and innate free-cast — behave differently at cast time and at long-rest time. Storing an origin enum plus the free-cast allowance on the entry is what makes "you have Longstrider once per long rest without a slot, *and* you can up-cast it with a level 2 slot" expressible.
+
+**Snapshot spell text on the character document.** This is the most disputable non-DRY choice, since 391 spells duplicated across thousands of characters is real storage. I'd still do it, for the same reason as items: DMs alter spells, tables ban spells, errata change spells, and third-party spells have no catalog row. The compromise I'd accept if storage bites: snapshot the *mechanically load-bearing* fields (level, school, casting time, range, components, duration, concentration, ritual, damage/healing expressions, save) and keep only a reference for the long descriptive text.
+
+```json
+{
+  "spellcasting": {
+    "sources": [
+      {
+        "source_id": "spc_ranger",
+        "source_kind": "class",
+        "source_name": "Ranger",
+        "class_ref": "cls_01",
+        "spellcasting_ability": "wisdom",
+        "spell_save_dc": 14,
+        "spell_attack_bonus": 6,
+        "caster_progression": "half",
+        "spell_list_name": "Ranger",
+        "preparation": {
+          "uses_prepared_spells": true,
+          "prepared_maximum": 6,
+          "prepared_current_count": 6,
+          "prepares_from": "class_list",
+          "swap_rule": { "cadence": "long_rest", "spells_per_swap": 1, "unlimited": false },
+          "can_swap_cantrips": false,
+          "cantrips_known": 0
+        },
+        "ritual_casting": { "enabled": false, "requires_prepared": true, "notes": null }
+      },
+      {
+        "source_id": "spc_lineage",
+        "source_kind": "species_lineage",
+        "source_name": "Wood Elf Lineage",
+        "class_ref": null,
+        "spellcasting_ability": "wisdom",
+        "spellcasting_ability_was_player_chosen": true,
+        "spell_save_dc": 14,
+        "spell_attack_bonus": 6,
+        "preparation": { "uses_prepared_spells": false, "prepared_maximum": 0, "prepares_from": "granted", "swap_rule": null }
+      }
+    ],
+
+    "slot_pools": [
+      {
+        "pool_id": "pool_standard",
+        "pool_name": "Spell Slots",
+        "recharge_trigger": "long_rest",
+        "contributing_sources": ["spc_ranger"],
+        "slots": {
+          "1": { "maximum": 4, "expended": 1 },
+          "2": { "maximum": 3, "expended": 0 },
+          "3": { "maximum": 2, "expended": 0 },
+          "4": { "maximum": 0, "expended": 0 },
+          "5": { "maximum": 0, "expended": 0 },
+          "6": { "maximum": 0, "expended": 0 },
+          "7": { "maximum": 0, "expended": 0 },
+          "8": { "maximum": 0, "expended": 0 },
+          "9": { "maximum": 0, "expended": 0 }
+        }
+      }
+    ],
+
+    "pact_magic": null,
+
+    "spellbook": { "has_spellbook": false, "container_item_instance_id": null, "spells": [] },
+
+    "spells": [
+      {
+        "entry_id": "cast_hunters_mark",
+        "spell_name": "Hunter's Mark",
+        "source_id": "spc_ranger",
+        "preparation": {
+          "origin": "always_prepared_feature",
+          "origin_detail": "Favored Enemy",
+          "is_prepared": true,
+          "counts_against_prepared_maximum": false,
+          "free_casts": { "maximum": 3, "remaining": 2, "recharge": "long_rest", "cast_at_level": 1 }
+        },
+        "level": 1,
+        "school": "Divination",
+        "casting_time": { "action_type": "bonus_action", "value": 1, "unit": "action", "is_ritual": false },
+        "range": { "kind": "distance", "distance_ft": 90 },
+        "area_of_effect": null,
+        "components": { "verbal": true, "somatic": false, "material": false, "material_text": null, "material_cost_gp": 0, "material_consumed": false },
+        "duration": { "kind": "timed", "value": 1, "unit": "hour", "concentration": true },
+        "attack_or_save": { "kind": "none", "save_ability": null },
+        "damage": [{ "expression": "1d6", "type": "Force", "trigger": "on_weapon_hit" }],
+        "healing": null,
+        "upcast": { "scales": true, "notes_snapshot": "Longer duration at levels 3 and 5." },
+        "description_snapshot": "Mark a creature; deal extra damage when you hit it with an attack.",
+        "source_ref": { "catalog_id": "cat_spell_hunters_mark", "book": "PHB 2024", "is_homebrew": false, "srd_licensed": true }
+      },
+      {
+        "entry_id": "cast_pass_without_trace",
+        "spell_name": "Pass without Trace",
+        "source_id": "spc_lineage",
+        "preparation": {
+          "origin": "granted_species",
+          "origin_detail": "Wood Elf Lineage, level 5",
+          "is_prepared": true,
+          "counts_against_prepared_maximum": false,
+          "free_casts": { "maximum": 1, "remaining": 1, "recharge": "long_rest", "cast_at_level": 2 },
+          "may_also_cast_with_slots": true
+        },
+        "level": 2,
+        "school": "Abjuration",
+        "casting_time": { "action_type": "action", "value": 1, "unit": "action", "is_ritual": false },
+        "range": { "kind": "self" },
+        "area_of_effect": { "shape": "emanation", "size_ft": 30 },
+        "components": { "verbal": true, "somatic": true, "material": true, "material_text": "ashes from a burned leaf of mistletoe", "material_cost_gp": 0, "material_consumed": false },
+        "duration": { "kind": "timed", "value": 1, "unit": "hour", "concentration": true },
+        "attack_or_save": { "kind": "none" },
+        "damage": [], "healing": null,
+        "upcast": { "scales": false },
+        "description_snapshot": "You and nearby allies gain a bonus to Stealth checks and can't be tracked.",
+        "source_ref": { "catalog_id": "cat_spell_pass_without_trace", "book": "PHB 2024", "is_homebrew": false, "srd_licensed": true }
+      }
+    ],
+
+    "concentration": {
+      "is_concentrating": true,
+      "spell_entry_id": "cast_hunters_mark",
+      "started_at": "2026-08-10T12:44:00Z",
+      "ends_at_estimate": "2026-08-10T13:44:00Z",
+      "target_note": "Ogre chieftain"
+    },
+
+    "pending_swaps": [
+      { "source_id": "spc_ranger", "available_at": "next_long_rest", "swaps_allowed": 1 }
+    ]
+  }
+}
+```
+
+---
+
+## Part 5 — Currency
+
+### 5.1 What the rules require
+
+Five denominations — copper, silver, electrum, gold, platinum — with the standard 10:1 ladder except electrum's half-gold oddity. **Fifty coins of any type weigh one pound**, which is the rule that forces currency into the encumbrance calculation.
+
+Coins are only part of the treasure picture. The 2024 DMG treats trade bars, gemstones, art objects, and trade goods as distinct treasure categories with their own value tables. Backgrounds allow swapping the equipment package for 50 gp, so starting wealth has two shapes. And downtime systems, crafting, and Bastion upkeep all create scheduled expenditures.
+
+### 5.2 Schema argument
+
+**Store denomination counts as the source of truth. Do not normalize to a single unit.** This is the argument I'd defend hardest in this section. Converting everything to copper on write is tempting and wrong for three reasons: (1) players deliberately hold particular coins, and merchants care; (2) electrum is a house-rule minefield — some tables ban it, some treat it as 5 sp, and a normalized store silently picks a side; (3) conversion at a table is a *negotiated action*, not an arithmetic identity, and a tool that auto-converts will produce balances the player never agreed to.
+
+Store `total_value_gp` and `total_value_cp` as **denormalized convenience fields** computed on write, clearly labeled as derived. That's redundant by design and it's the right redundancy: it lets the UI show a headline number without any consumer re-implementing the conversion table.
+
+**Separate coins from valuables.** A 250 gp ruby is not 250 gp. It is an object with weight, a sale price that depends on a Persuasion check and a market, and possibly a plot attached. Give valuables their own array with an `estimated_value_gp`, a `sold` flag, and a link to an inventory entry if they occupy space.
+
+**Keep a ledger.** An append-only transaction log with running balance snapshots is duplicated state relative to the balances. It is also the only thing that answers "where did 400 gp go" three sessions later, and it makes party-fund splits auditable.
+
+**Model shared party funds as a reference, not a copy.** This is the one place I'd break the self-contained-document rule, because a shared purse copied into five character documents will drift within one session. Reference a `party_treasury` document by id and cache only a read-only snapshot with a timestamp.
+
+```json
+{
+  "currency": {
+    "coins": { "cp": 46, "sp": 12, "ep": 0, "gp": 118, "pp": 4 },
+    "coin_count_total": 180,
+    "coin_weight_lb": 3.6,
+
+    "derived": {
+      "total_value_gp": 130.8,
+      "total_value_cp": 13080,
+      "conversion_table_used": { "cp_per_sp": 10, "cp_per_ep": 50, "cp_per_gp": 100, "cp_per_pp": 1000 },
+      "electrum_enabled_at_table": true,
+      "computed_at": "2026-08-10T14:02:00Z"
+    },
+
+    "valuables": [
+      {
+        "valuable_id": "val_01",
+        "name": "Star ruby",
+        "category": "gemstone",
+        "quantity": 1,
+        "estimated_value_gp": 1000,
+        "appraised": true,
+        "appraised_by": "Guild assayer, Session 12",
+        "weight_lb_total": 0,
+        "inventory_entry_id": "inv_022",
+        "is_sold": false,
+        "notes": "The Ashen Consortium has asked after it."
+      },
+      {
+        "valuable_id": "val_02",
+        "name": "Silver trade bar",
+        "category": "trade_bar",
+        "quantity": 3,
+        "estimated_value_gp": 5,
+        "weight_lb_total": 15,
+        "inventory_entry_id": "inv_023",
+        "is_sold": false
+      }
+    ],
+
+    "starting_wealth": {
+      "method": "background_package",
+      "package_taken": true,
+      "gold_alternative_gp": 50,
+      "class_starting_gold_gp": null
+    },
+
+    "party_treasury_ref": {
+      "party_treasury_id": "treas_camp44b1",
+      "snapshot": { "gp": 640, "share_basis": "equal", "as_of": "2026-08-09T23:10:00Z" },
+      "is_authoritative": false
+    },
+
+    "recurring_expenses": [
+      { "expense_id": "exp_01", "label": "Bastion upkeep", "amount_gp": 25, "cadence": "per_bastion_turn", "active": true },
+      { "expense_id": "exp_02", "label": "Lifestyle (comfortable)", "amount_gp": 2, "cadence": "per_day", "active": true }
+    ],
+
+    "ledger": [
+      {
+        "seq": 214,
+        "at": "2026-08-09T22:40:00Z",
+        "kind": "income",
+        "delta": { "gp": 75 },
+        "balance_after": { "cp": 46, "sp": 12, "ep": 0, "gp": 118, "pp": 4 },
+        "counterparty": "Emerald Enclave",
+        "reason": "Bounty: blightwood culling",
+        "linked_reputation_event_id": "rep_ev_09",
+        "session_number": 21
+      },
+      {
+        "seq": 213,
+        "at": "2026-08-09T14:05:00Z",
+        "kind": "expense",
+        "delta": { "gp": -50 },
+        "balance_after": { "cp": 46, "sp": 12, "ep": 0, "gp": 43, "pp": 4 },
+        "counterparty": "Herbalist, Greenrest",
+        "reason": "Components for Potion of Greater Healing",
+        "linked_item_instance_id": "itm_c118",
+        "session_number": 21
+      }
+    ]
+  }
+}
+```
+
+---
+
+## Part 6 — Reputation
+
+### 6.1 What the rules actually say
+
+Renown is an **optional rule in the 2024 DMG's toolbox chapter**, and its specifics are worth encoding exactly because they're more concrete than most people remember:
+
+- Renown tracks a character's *or the party's* standing with a group — faction, organization, or community. A Renown Score starts at 0 and rises with favor earned.
+- **Renown is tracked separately per group.** A character might sit at 5 with one faction and 20 with another.
+- **Gaining:** advancing a group's interests is +1; completing a mission the group assigned or that directly benefits them is +2; hugely significant quests may be +3 or +4 at the DM's call. Separately, once a character is at 1+, downtime spent on minor tasks and socializing raises the score by 1 after a number of days equal to **10 times the current Renown Score** — an escalating cost curve the tool should compute and display.
+- **Benefit thresholds:** at 3+ a character is a respected member, other members default to Friendly, and lodging and food are provided in dire circumstances; perks at 3+ might include a contact, a safe house, or gear discounts; at 10+, access to potions and scrolls, calling in a favor, or backup on missions; at 50, calling on a small army, a rare magic item, access to a spellcaster, or assigning missions to lower-ranked members. Ranks and titles are DM-defined thresholds layered on top.
+- **Losing:** disagreements don't cost renown, but serious offenses do, by DM discretion. **A Renown Score can never drop below 0.** That floor is a hard validation constraint.
+- **Level-based renown** is an alternative that skips score-tracking entirely, mapping character level to an equivalent score: level 1→1, 3→3, 5→10, 11→25, 17→50.
+
+Renown is not the whole reputation surface. The DMG toolbox also carries **Marks of Prestige** (titles, letters of recommendation, medals, land grants, strongholds) and **Supernatural Gifts**, both of which are standing-shaped rewards without a numeric score. Beyond that, tables track individual NPC attitude (Hostile / Indifferent / Friendly is the codified social-interaction ladder), and settings add parallel systems like Piety.
+
+### 6.2 Schema argument
+
+**Reputation is per-(character, group) and must not be a scalar on the character.** That's the clearest structural implication of the rules text.
+
+**Store the score, the rank, the unlocked perks, and the event ledger — all four, redundantly.** The perks are *derivable* from the score via thresholds, but the thresholds are DM-configurable, the perks are DM-invented, and a perk once granted shouldn't silently vanish if the score dips. Storing granted perks explicitly, each with the score at which it was granted, is both non-DRY and correct.
+
+**Support both tracking modes as a per-group mode flag.** A group using level-based renown has no score to increment; the tool should display the mapped equivalent and disable the +1/+2 controls rather than pretending.
+
+**Model the downtime progress bar explicitly.** The 10×score-days rule is exactly the kind of bookkeeping a tool should own: store `downtime_days_accumulated` and `downtime_days_required`, recompute the requirement when the score changes, and carry over or reset per the DM's ruling (store which).
+
+**Keep numeric renown separate from qualitative standing.** A character can be at renown 12 with the Harpers and simultaneously *personally* hated by one Harper commander. Give groups a `default_attitude` and give individual NPCs their own standing entries.
+
+**Ledger everything, with links.** A renown event that also paid 75 gp should reference the currency ledger entry. Cross-linking the two logs is duplicated relational information; it's also how the tool reconstructs a session.
+
+```json
+{
+  "reputation": {
+    "mode_default": "score",
+
+    "groups": [
+      {
+        "group_id": "grp_emerald_enclave",
+        "group_name": "Emerald Enclave",
+        "group_kind": "faction",
+        "is_member": true,
+        "joined_at": "2026-05-02T00:00:00Z",
+        "tracking_mode": "score",
+
+        "renown_score": 12,
+        "renown_score_minimum": 0,
+        "renown_score_maximum": 50,
+        "is_party_shared_score": false,
+        "party_renown_score": null,
+
+        "level_based_equivalent": null,
+
+        "rank": {
+          "current_rank_name": "Springwarden",
+          "current_rank_index": 2,
+          "rank_ladder": [
+            { "index": 0, "name": "Sprout", "renown_required": 0 },
+            { "index": 1, "name": "Greenwarden", "renown_required": 3 },
+            { "index": 2, "name": "Springwarden", "renown_required": 10 },
+            { "index": 3, "name": "Master of the Hunt", "renown_required": 25 }
+          ],
+          "promoted_at": "2026-08-02T00:00:00Z",
+          "additional_prerequisites_note": "DM required completion of the Thornwatch trial."
+        },
+
+        "default_attitude": "friendly",
+        "recognition_achieved": true,
+
+        "perks_granted": [
+          { "perk_id": "prk_01", "name": "Safe house access (Greenrest)", "granted_at_score": 3, "granted_at": "2026-05-28T00:00:00Z", "active": true, "revoked_at": null },
+          { "perk_id": "prk_02", "name": "Potions and scrolls at cost", "granted_at_score": 10, "granted_at": "2026-08-02T00:00:00Z", "active": true, "revoked_at": null }
+        ],
+
+        "downtime_progress": {
+          "enabled": true,
+          "days_accumulated": 40,
+          "days_required": 120,
+          "formula_snapshot": "10 x current Renown Score",
+          "resets_on_score_increase": true,
+          "last_updated": "2026-08-06T00:00:00Z"
+        },
+
+        "contacts": [
+          { "contact_id": "ct_01", "name": "Aldreth Fen", "role": "Quartermaster", "relationship": "ally", "notes": "Owes the party a favor." }
+        ],
+
+        "notes": "The Enclave is uneasy about the ruby.",
+
+        "ledger": [
+          {
+            "event_id": "rep_ev_09",
+            "at": "2026-08-09T22:40:00Z",
+            "session_number": 21,
+            "kind": "gain",
+            "delta": 2,
+            "score_after": 12,
+            "reason_category": "assigned_mission",
+            "reason": "Cleared the blightwood at the Enclave's request.",
+            "awarded_by": "DM",
+            "linked_currency_ledger_seq": 214
+          },
+          {
+            "event_id": "rep_ev_08",
+            "at": "2026-07-19T21:00:00Z",
+            "session_number": 18,
+            "kind": "gain",
+            "delta": 1,
+            "score_after": 10,
+            "reason_category": "advanced_interests",
+            "reason": "Rerouted the logging concession.",
+            "awarded_by": "DM"
+          }
+        ]
+      },
+      {
+        "group_id": "grp_ashen_consortium",
+        "group_name": "The Ashen Consortium",
+        "group_kind": "guild",
+        "is_member": false,
+        "tracking_mode": "level_based",
+        "renown_score": null,
+        "level_based_equivalent": { "character_level": 7, "mapped_renown_score": 10, "mapping_table_snapshot": [[1,1],[3,3],[5,10],[11,25],[17,50]] },
+        "default_attitude": "indifferent",
+        "recognition_achieved": true,
+        "perks_granted": [],
+        "downtime_progress": { "enabled": false },
+        "ledger": []
+      }
+    ],
+
+    "individual_standing": [
+      {
+        "npc_id": "npc_karrow",
+        "npc_name": "Commander Karrow",
+        "affiliated_group_id": "grp_emerald_enclave",
+        "attitude": "hostile",
+        "attitude_history": [
+          { "at": "2026-06-14T00:00:00Z", "attitude": "indifferent", "reason": "First meeting." },
+          { "at": "2026-07-30T00:00:00Z", "attitude": "hostile", "reason": "Publicly contradicted him at the Moot." }
+        ],
+        "notes": "Will not be swayed by renown alone."
+      }
+    ],
+
+    "marks_of_prestige": [
+      {
+        "mark_id": "mrk_01",
+        "kind": "title",
+        "name": "Warden of the Thornwatch",
+        "granted_by_group_id": "grp_emerald_enclave",
+        "granted_at": "2026-08-02T00:00:00Z",
+        "mechanical_effect_snapshot": null,
+        "description": "Ceremonial; grants right of passage through Enclave lands.",
+        "linked_item_instance_id": null
+      },
+      {
+        "mark_id": "mrk_02",
+        "kind": "land_grant",
+        "name": "Deed to the Old Weir",
+        "granted_by_group_id": "grp_emerald_enclave",
+        "granted_at": "2026-08-02T00:00:00Z",
+        "linked_bastion_id": "bst_01",
+        "description": "Twelve acres and a ruined mill."
+      }
+    ],
+
+    "alternate_tracks": [
+      {
+        "track_id": "trk_piety",
+        "track_name": "Piety (Selûne)",
+        "track_kind": "custom",
+        "value": 8,
+        "thresholds": [{ "at": 3, "label": "Devoted" }, { "at": 10, "label": "Favored" }],
+        "notes": "Table-specific system; not from the 2024 core rules."
+      }
+    ]
+  }
+}
+```
+
+---
+
+## Part 7 — The schema argument, consolidated
+
+### 7.1 One aggregate root, catalogs as seed data
+
+The character document is the unit of consistency. Everything needed to render and resolve a sheet lives inside it: species traits, feats, features, spells with mechanical fields, item instances (either embedded or in a per-character `item_instance` collection keyed by `owner_character_id`), currency, and reputation.
+
+Catalog collections (`spell_catalog`, `item_catalog`, `species_catalog`, `background_catalog`, `feat_catalog`, `class_catalog`) exist to populate the picker UI and to seed new snapshots. They are **not joined at read time**. Every embedded object carries a `source_ref` recording where it came from, whether it's homebrew, and whether it's SRD-licensed — the last flag being load-bearing given the SRD 5.2 licensing boundary.
+
+The honest counterargument: this makes global content updates hard. If errata changes Cure Wounds, no existing character updates automatically. My answer is that this is correct behavior, and the fix is an explicit, user-consented "your DM's ruleset updated — review 3 changes" migration flow, with the `source_ref.catalog_id` and a `snapshot_version` making the diff computable. Silent mutation of a live sheet is worse than a stale sheet.
+
+### 7.2 Redundancy rules, stated as policy
+
+| Redundancy | Justification |
+|---|---|
+| Raw inputs *and* computed totals (ability scores, AC, weight, currency value) | Sheets are explanations, not just numbers; every consumer would otherwise reimplement the math |
+| Full text snapshot *and* catalog reference | Immutability of a played character; homebrew has no catalog row |
+| Append-only logs *and* current state (build, inventory, currency, renown) | Undo, audit, "where did it go," DM disputes |
+| Container parent pointer *and* denormalized location path | Moves need the pointer; rendering and orphan-recovery need the path |
+| Granted perks *and* score thresholds | Thresholds are DM-configurable; granted perks shouldn't retroactively vanish |
+| Party treasury reference *and* cached snapshot | Concurrency demands one owner; the UI still needs a number |
+
+### 7.3 Discriminated unions over generic bags
+
+Items use `item_type` as a discriminant with per-type sub-objects (`weapon`, `armor`, `consumable`, `container`) that are `null` when inapplicable. Spellcasting sources use `source_kind`. Reputation groups use `tracking_mode`. Each variant spells out its fields explicitly rather than sharing an `attributes` map. This is verbose and it is validatable, which a bag is not.
+
+### 7.4 Identity and concurrency
+
+- Every document has `_id`; every embedded object that can be mutated independently has a stable `instance_id` or `entry_id`. Never key an embedded object by array index or by name — names get changed by players.
+- `doc_revision` supports optimistic concurrency. A shared table with a DM editing simultaneously will hit conflicts; the log-based sub-structures (ledgers) are append-only and merge cleanly, which is a quiet argument for having them.
+- `ruleset.revision` on every document, because a table will mix 2014 and 2024 characters and the same field name means different things across them.
+
+### 7.5 What I deliberately did *not* do
+
+- No cross-character normalization of shared items (party loot copied per character, with a `party_shared` storage location instead).
+- No single-unit currency normalization.
+- No lookup-table extraction for repeated enums (damage types, schools, conditions) — they're stored as strings on each document, validated by schema `enum` rather than by a foreign key.
+- No computed-on-read anything. Every derived value is stored with a `computed_at`.
+- No index or shard-key design, per your instruction. When that becomes relevant, the obvious first questions are whether `campaign_id` or `owner_user_id` is the partition key and whether item instances stay embedded or split into a sibling collection — both of which are decisions this schema deliberately leaves open, since the character document works either way.
+
+### 7.6 Open questions worth a decision before implementation
+
+1. **Embedded vs. sibling item instances.** I showed items as separate documents with `owner_character_id`. Embedding them fully into the character document is equally valid and more self-contained; the tipping point is whether a character can plausibly carry hundreds of item instances (hoarders can) and whether a document size cap is in play.
+2. **How much spell text to snapshot.** Full text is safest; mechanical-fields-only plus reference is the pragmatic compromise.
+3. **Party-level documents.** Party treasury, shared loot, and party-level renown all want a `party` aggregate. This report keeps them as references; a fuller design would give the party its own root.
+4. **Homebrew authoring.** The `source_ref.is_homebrew` and `authored_by_user_id` fields imply a homebrew content pipeline that this report doesn't specify.
+5. **Rest and dawn semantics.** Long rest, short rest, and dawn are three distinct recharge triggers, and dawn is not a rest. The `rest_state` block handles this, but the resolution order at a table ("we long rest overnight") needs a stated rule.
+
+---
+
+## Sources consulted
+
+- Wizards of the Coast / D&D Beyond: *Updates in the Player's Handbook (2024)*; *The 10 Species in the 2024 Player's Handbook*; *The Backgrounds and Origin Feats in the 2024 Player's Handbook*; *Your Guide to Weapon Mastery*; *4 Key Changes to Spells in the 2024 Player's Handbook*; *You Can Now Publish Your Own Creations Using the New Core Rules* (SRD 5.2 / CC-BY-4.0); D&D Beyond Basic Rules (2024) equipment and rules glossary; Potion of Healing item entry and rules forum thread on potion usage.
+- Roll20 Compendium, *D&D 2024* (Dungeon Master's Guide 2024): Renown; Coins; Magic Items; Conditions; Rules Definitions; Casting Spells. Roll20 guides to 2024 Weapon Mastery and 2024 Backgrounds.
+- Secondary rules coverage: RPGBot 2024 transition guide and weapon mastery guide; Arcane Eye backgrounds and healing-potion guides; Wargamer 2024 feats and 2024 weapons; EN World changelog and rules discussion threads; Kassoon 2024 weapons reference; ScreenRant and ComicBook coverage of SRD 5.2 and the prepared-spellcasting change.
+
+*This report paraphrases rules mechanics for design purposes; it does not reproduce rulebook text. Shipping rule content in a product should be scoped to SRD 5.2.1 under CC-BY-4.0 or entered by users.*

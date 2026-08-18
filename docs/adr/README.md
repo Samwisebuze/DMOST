@@ -8,7 +8,7 @@ otherwise survive only in a commit message.
 ## Conventions
 
 - **One decision per file, named `NNNN-kebab-case-title.md`** — four-digit prefix, allocated in
-  order, never reused. The number is the record's identity: other documents cite "ARD 0001", so it
+  order, never reused. The number is the record's identity: other documents cite "ADR 0001", so it
   outlives any retitling.
 - **The headings are Status, Context, Decision, Consequences**, in that order. Context is the
   situation that forced a choice, stated without the answer in it. Decision is what was chosen,
@@ -21,7 +21,7 @@ otherwise survive only in a commit message.
 | --- | --- |
 | `Proposed` | written down, not yet agreed |
 | `Accepted` | in force; the code either reflects it or is expected to |
-| `Superseded by ARD NNNN` | no longer in force, kept for the reasoning |
+| `Superseded by ADR NNNN` | no longer in force, kept for the reasoning |
 
 **Accepted does not mean implemented.** A record describes a decision, not a state of the tree; a
 record may sit accepted for a long time before code exists for it, and says so in its own text.
