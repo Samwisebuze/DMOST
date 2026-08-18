@@ -8,6 +8,7 @@
     "ruleset": {
       "type": "object",
       "required": ["system", "revision"],
+      "additionalProperties": true,
       "properties": {
         "system": { "const": "dnd5e" },
         "revision": { "enum": ["srd@5.1", "srd@5.2.1"] },

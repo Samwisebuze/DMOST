@@ -8,6 +8,7 @@
     "buildLogEntry": {
       "type": "object",
       "required": ["seq", "decision"],
+      "additionalProperties": true,
       "properties": {
         "seq": { "type": "integer" },
         "at": { "type": "string", "format": "date-time" },

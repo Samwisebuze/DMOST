@@ -7,6 +7,7 @@
   "$defs": {
     "combat": {
       "type": "object",
+      "additionalProperties": true,
       "properties": {
         "armor_class": {
           "type": "object",
@@ -60,6 +61,7 @@
     "resource": {
       "type": "object",
       "required": ["resource_id", "name", "maximum", "current"],
+      "additionalProperties": true,
       "properties": {
         "resource_id": { "type": "string" },
         "name": { "type": "string" },
@@ -73,6 +75,7 @@
 
     "restState": {
       "type": "object",
+      "additionalProperties": true,
       "properties": {
         "last_short_rest_at": { "type": ["string", "null"], "format": "date-time" },
         "last_long_rest_at": { "type": ["string", "null"], "format": "date-time" },

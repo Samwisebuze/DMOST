@@ -7,6 +7,7 @@
   "$defs": {
     "reputation": {
       "type": "object",
+      "additionalProperties": true,
       "properties": {
         "mode_default": { "enum": ["score", "level_based", "narrative"] },
         "groups": { "type": "array", "items": { "$ref": "#/$defs/reputationGroup" } },

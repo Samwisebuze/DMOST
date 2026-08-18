@@ -8,6 +8,7 @@
     "classEntry": {
       "type": "object",
       "required": ["instance_id", "class_name", "class_level", "hit_die"],
+      "additionalProperties": true,
       "properties": {
         "instance_id": { "type": "string" },
         "class_name": { "type": "string" },

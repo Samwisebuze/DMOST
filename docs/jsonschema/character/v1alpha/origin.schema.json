@@ -8,6 +8,7 @@
     "species": {
       "type": "object",
       "required": ["instance_id", "name", "creature_type", "size", "base_walking_speed"],
+      "additionalProperties": true,
       "properties": {
         "instance_id": { "type": "string" },
         "name": { "type": "string" },
@@ -46,6 +47,7 @@
     "background": {
       "type": "object",
       "required": ["instance_id", "name"],
+      "additionalProperties": true,
       "properties": {
         "instance_id": { "type": "string" },
         "name": { "type": "string" },

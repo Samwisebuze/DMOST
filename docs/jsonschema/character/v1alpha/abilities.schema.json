@@ -8,7 +8,7 @@
     "abilities": {
       "type": "object",
       "required": ["strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma"],
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "strength": { "$ref": "#/$defs/abilityScore" },
         "dexterity": { "$ref": "#/$defs/abilityScore" },
@@ -56,6 +56,7 @@
     "abilityAllocation": {
       "type": "object",
       "description": "srd@5.2.1: ability increases come from the BACKGROUND, not the species.",
+      "additionalProperties": true,
       "properties": {
         "generation_method": { "enum": ["standard_array", "point_buy", "rolled", "custom"] },
         "standard_array_assignment": { "type": ["object", "null"] },

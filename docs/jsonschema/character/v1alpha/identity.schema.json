@@ -8,6 +8,7 @@
     "identity": {
       "type": "object",
       "required": ["character_name"],
+      "additionalProperties": true,
       "properties": {
         "character_name": { "type": "string" },
         "player_name": { "type": ["string", "null"] },
@@ -34,6 +35,7 @@
     "progression": {
       "type": "object",
       "required": ["total_character_level", "proficiency_bonus"],
+      "additionalProperties": true,
       "properties": {
         "total_character_level": { "type": "integer", "minimum": 1, "maximum": 20 },
         "experience_points": { "type": ["integer", "null"], "minimum": 0 },

@@ -8,6 +8,7 @@
     "vitals": {
       "type": "object",
       "required": ["hit_points"],
+      "additionalProperties": true,
       "properties": {
         "hit_points": {
           "type": "object",

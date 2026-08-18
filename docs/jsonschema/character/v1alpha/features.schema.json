@@ -8,6 +8,7 @@
     "feature": {
       "type": "object",
       "required": ["instance_id", "name", "origin"],
+      "additionalProperties": true,
       "properties": {
         "instance_id": { "type": "string" },
         "name": { "type": "string" },
@@ -35,6 +36,7 @@
     "feat": {
       "type": "object",
       "required": ["instance_id", "name", "category"],
+      "additionalProperties": true,
       "properties": {
         "instance_id": { "type": "string" },
         "name": { "type": "string" },
@@ -62,6 +64,7 @@
 
     "proficiencies": {
       "type": "object",
+      "additionalProperties": true,
       "properties": {
         "armor": { "type": "array", "items": { "type": "string" } },
         "weapons": { "type": "array", "items": { "type": "string" } },

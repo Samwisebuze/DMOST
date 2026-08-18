@@ -30,6 +30,16 @@ player character. It holds only the top-level assembly — every section is a
   filesystem. Keep the directory flat so that stays true.
 - **Definitions live in `$defs` only**; no file defines a schema at its own root.
   A file is a namespace, not a type.
+- **Section roots declare `"additionalProperties": true`** — the document root in
+  `character.schema.json` and every `$def` it refs directly. The sheet is the
+  artifact worth preserving: a document carrying a field this version does not
+  map (a homebrew entry, a field a later revision adds) must still validate and
+  round-trip rather than be rejected. The declaration is explicit, though it
+  restates the JSON Schema default, so the policy is visible at the roots where
+  it matters. Nested objects are unaffected, and constraints that shape *keys*
+  rather than admit fields stay strict — `slotPool.slots` keeps
+  `additionalProperties: false` because its `patternProperties` is what limits
+  slot levels to 1–9.
 - **`common.schema.json` is the only file others may depend on.** Sections do not
   ref each other — cross-section links are by id string (e.g. a class's
   `spellcasting_ref`), which keeps the section files independently loadable.
