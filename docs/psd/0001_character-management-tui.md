@@ -1,15 +1,18 @@
 ---
 id: PSD-0001
 title: Character Management TUI
-status: draft
-version: "0.4.5"
 updated: 2026-08-18
+status: 
+    - kind: draft
+    - version: v0.4.7
 component: 
-    - name: dmosh CLI
+    - type: CLI
+    - name: dmosh
     - subsystem: character
 audience:
-  - Engineering (Go/TUI implementers)
-  - Project contributors
+  - implementers[GO]
+  - implementers[TUI]
+  - contributors
 related:
   - docs/jsonschema/character/v1alpha/classes.schema.json
   - docs/psd/share/2024-character-schema-report.md
@@ -25,17 +28,21 @@ related:
 
 **v0.3** — first ambiguity pass. Eight cross-cutting decisions made explicit (D1–D8).
 
-**v0.4** — second ambiguity pass. The nine remaining open questions resolved (D9–D17); §12 is now down to four genuinely-open items, all of them deliberately deferred rather than unexamined.
+**v0.4** — second ambiguity pass. The nine remaining open questions resolved (D9–D17); §13 is now down to four genuinely-open items, all of them deliberately deferred rather than unexamined.
 
 **v0.4.1** — the binary is named **`dmosh`** (was `dnd`). This also renames the environment variable to `DMOSH_DB` and the default data directory to `$XDG_DATA_HOME/dmosh/`.
 
 **v0.4.2** — `DMOSH_CHARACTER` makes the target character resolvable from the environment (D18), so an `.envrc` per player folder can drive the whole CLI argument-free.
 
-**v0.4.3** — the Phase 3 History screen is specified (D19), closing the last of §12's four open questions from v0.4. Three remain, all deferred by choice.
+**v0.4.3** — the Phase 3 History screen is specified (D19), closing the last of §13's four open questions from v0.4. Three remain, all deferred by choice.
 
 **v0.4.4** — item instance loading and revisioning decided (D20), superseding D15's deferral.
 
-**v0.4.5** — **D20 amended:** item instances now share the character's `doc_revision` rather than carrying their own. Lazy loading is unchanged. Amended in place rather than issued a new number, since it is the same decision reversing one of its two halves within one review cycle; the reversal and its consequences are recorded in *Corrections and inferences* below. This closes §12's item-snapshot question outright — restore is now complete by construction.
+**v0.4.7** — adds §6.1, the `play_log` schema change, as **Phase 0 pre-work**. This is the first revision to modify `character.schema.json`; see the amended note below.
+
+**v0.4.6** — adds §12, *What v1 is built to find out*, following the GM session tool spec's §11 convention: a local `usage_counters` table, a `dmosh character feedback` command, and eight user-facing questions this version exists to answer. Open questions move to §13.
+
+**v0.4.5** — **D20 amended:** item instances now share the character's `doc_revision` rather than carrying their own. Lazy loading is unchanged. Amended in place rather than issued a new number, since it is the same decision reversing one of its two halves within one review cycle; the reversal and its consequences are recorded in *Corrections and inferences* below. This closes §13's item-snapshot question outright — restore is now complete by construction.
 
 ### v0.3 decisions
 
@@ -82,17 +89,24 @@ related:
 |---|---|---|---|
 | D20 | Item loading and revisioning | **Lazy load** on first detail-pane selection; **shared `doc_revision`** with the owning character, so character-plus-items is one aggregate and snapshot restore is atomic. Eager loading deferred until something demands it. Supersedes D15; revisioning half amended in v0.4.5. | §5.3, §7.9, §8.6, §9.1, §9.3, §9.4, §10 |
 
+### v0.4.7 decision
+
+| # | Decision | Resolution | Sections |
+|---|---|---|---|
+| D21 | Play log (schema prerequisite) | **Add `play_log` to `character.schema.json` as Phase 0 pre-work**, for PSD-0002's patch idempotency. Read/validated/round-tripped in v1; written by nothing. Exempt from `restore`. | §6.1, §10, §11 |
+
 ### Corrections and inferences
 
-Five of these decisions had consequences that required changes beyond the sections they nominally touch. Recording them explicitly because each is a place where a reader of an earlier draft would otherwise be misled:
+Six of these decisions had consequences that required changes beyond the sections they nominally touch. Recording them explicitly because each is a place where a reader of an earlier draft would otherwise be misled:
 
-1. **D13 narrows D1.** v0.3's §7.2 promised that species and background become catalog-backed pickers in Phase 2. Under D13 they do not — the catalog covers spells, equipment, and class-table reference text only. Species, background, origin feats, and class features remain free-text entry indefinitely. Whether they ever get catalog coverage is now an open question (§12.1).
+1. **D13 narrows D1.** v0.3's §7.2 promised that species and background become catalog-backed pickers in Phase 2. Under D13 they do not — the catalog covers spells, equipment, and class-table reference text only. Species, background, origin feats, and class features remain free-text entry indefinitely. Whether they ever get catalog coverage is now an open question (§13.1).
 2. **D17 forces a command rename.** D8 introduced `dmosh character restore` for undeleting; D17's snapshot feature wants `restore --at <point>` for time-travel. These are different operations and shouldn't share a verb. Undelete is now `dmosh character undelete`; `restore` means snapshot restore.
 3. **D8 + D11 expose a gap.** Soft delete alone means the database grows forever, and the `ON DELETE CASCADE` on `item_instances` never fires because soft deletion is an `UPDATE`. A `dmosh character purge` command is therefore required to complete D8 — it is the only path that issues a real `DELETE`, and the only one that cascades. This was inferred rather than asked; flag it if you disagree.
 4. **D18 carves out the lifecycle commands, and surfaces a latent gap.** The request was to make the target argument optional; exempting `delete`/`undelete`/`purge`/`restore` from that is an added safety judgement, not something asked for — flag it if you'd rather the variable applied uniformly. Separately, D18 forced a rule the spec had never stated: nothing previously said what `<name-or-id>` does when two live characters share a name. Resolving by name is now potentially invisible to the user, so ambiguity is an explicit error (§4).
 5. **D20's revisioning half was reversed, and that exposed an `export` gap.** v0.4.4 specified independent per-item revisions; v0.4.5 reverses that to a shared revision so restore is a clean transition. Two knock-ons were not asked about. First, snapshots must now capture the item set, which meant an `items` column on `character_revisions` and an aggregation done in SQL (`json_group_array`) so that capturing every item does not force the editor to abandon lazy loading — that combination is the subtlest thing in this decision and §9.4 shows the statement. Second, treating character-plus-items as one aggregate makes it indefensible for `export --format json` to emit only the character document: §9.3 claims export is the backup-and-handoff story, and an export that silently dropped every magic item would make that claim false. Export is now a `{character, items[]}` envelope. The `doc_revision` column added to `item_instances` in v0.4.4 has been removed again.
+6. **D21 carries two judgements PSD-0002 did not make.** That spec names "the character log" and its entry shape but not the field name or its interaction with anything here. I chose `play_log` over `character_log` for the opposition with `build_log` (§6.1), and — more consequentially — **exempted it from `restore`**. Without that exemption, rewinding to a revision predating a patch would erase the record of applying it and let the next `patch apply` re-award the same XP, which is precisely the failure PSD-0002's idempotency design exists to prevent. It is the only field with such an exemption, and it makes D20's "restore is a clean transition" true of sheet state rather than of literally every byte. Both are flaggable.
 
-The document format itself is unchanged across every revision: `character.schema.json` remains the source of truth for what a character *is*.
+Through v0.4.6 the document format itself was unchanged across every revision. **v0.4.7 ends that**, additively and deliberately: `play_log` (§6.1) is the one field this spec adds, it is required by PSD-0002 rather than by anything here, and it is scheduled as Phase 0 precisely so the change happens once, before any code depends on the old shape. `character.schema.json` remains the source of truth for what a character *is*.
 
 ---
 
@@ -153,6 +167,7 @@ dmosh character recompute [<name-or-id>]|--all                  # only read-path
 dmosh character history [<name-or-id>]                          # list saved snapshots
 dmosh character import <file> [--format json]
 dmosh character export [<name-or-id>] --format markdown|json --out <file>
+dmosh character feedback --out <file>                           # local usage summary (§12)
 
 # Lifecycle (D8, D17) — these ALWAYS require an explicit target (D18)
 dmosh character delete <name-or-id>                             # soft delete
@@ -244,6 +259,73 @@ A CI job asserts the generated output is current (regenerate, `git diff --exit-c
 
 **Version drift.** `schema_version` is checked on load. A mismatch does not block opening (per the schema report's stance against silent mutation of live sheets) but produces the same kind of banner, naming the delta.
 
+### 6.1 Prerequisite: the play log — a change to `character.schema.json`
+
+Everything else in this spec is implementable against the schema as it stands. This is the exception, and it is **pre-work: land it before Phase 1 begins**, not during.
+
+**Why it exists.** The GM session tool (PSD-0002) proposes changes to a character as *patch packets*, and its safety model rests on idempotency — applying the same patch twice must not award the same 450 XP twice. That requires the character document to record which patch ops it has already applied. PSD-0002 §6.3 is explicit that there is no separate `applied_patches` array: the log is the only record, so the two cannot disagree. It names this "the character log" and assigns ownership of the change here, as a Phase 1 dependency of that tool.
+
+**Why it must land first.** D9 makes the Go type tree a build artifact of the schema. A root-level field added after Phase 1 means regenerating types, re-running every screen's model against them, and revisiting the round-trip corpus — for a field that could have been there from the first commit at no cost. The schema also declares `additionalProperties: false` at the root, so this cannot be a field the tool tolerates in the meantime and formalises later; until the schema knows about it, a document carrying it is *invalid*, and `import` would reject the very documents the GM tool produces.
+
+**Naming.** The field is `play_log`, sitting alongside the existing `build_log`. PSD-0002 refers to "the character log" in prose but never names the field, so this is a free choice: `character_log` inside a character document is redundant, whereas `build_log` / `play_log` reads as the deliberate opposition it is — decisions made *building* the character, versus things that happened *to* it in play. Flag it if you would rather match the other spec's prose.
+
+**The change.** One new root property and one `$defs` entry:
+
+```json
+"play_log": { "type": "array", "items": { "$ref": "#/$defs/playLogEntry" } }
+```
+
+```json
+"playLogEntry": {
+  "type": "object",
+  "required": ["entry_id", "seq", "at", "kind"],
+  "properties": {
+    "entry_id":            { "type": "string" },
+    "seq":                 { "type": "integer", "minimum": 0 },
+    "at":                  { "type": "string", "format": "date-time" },
+    "kind":                { "enum": ["patch_applied", "award", "note"] },
+    "campaign_id":         { "type": ["string", "null"] },
+    "session_number":      { "type": ["integer", "null"] },
+    "source_tool_version": { "type": ["string", "null"] },
+    "patch": {
+      "type": ["object", "null"],
+      "properties": {
+        "patch_id": { "type": "string" },
+        "resolutions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["op_id", "kind", "status"],
+            "properties": {
+              "op_id":  { "type": "string" },
+              "kind":   { "type": "string" },
+              "status": { "enum": ["applied", "skipped", "unresolvable"] },
+              "at":     { "type": "string", "format": "date-time" },
+              "detail": { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    },
+    "text":    { "type": ["string", "null"] },
+    "payload": { "type": ["object", "null"] }
+  }
+}
+```
+
+Two details in that fragment are load-bearing rather than incidental:
+
+- **`resolutions[].kind` is a bare string, not an enum.** PSD-0002 §10.7 makes no stability promise about its op vocabulary and requires receivers to skip unknown kinds with a warning rather than fail. An enum here would make recording *that* skip impossible — the document could not describe the op it had just declined — which would defeat the re-offer mechanism the whole idempotency design depends on.
+- **`kind` at entry level *is* an enum,** because these are the character tool's own entry types, not a foreign vocabulary. `patch_applied` is the only one PSD-0002 needs. `award` and `note` are reserved for the native uses that spec anticipates — quest rewards, XP, permanent buffs recorded by the player directly — and nothing in v1 writes them.
+
+**Version impact.** This is additive and `play_log` is optional, so every existing document stays valid. `schema_version` goes `1.0.0` → `1.1.0`; §6's mismatch banner will fire once for documents written before the bump, which is the intended behaviour, not a defect.
+
+**What v1 actually does with it: reads, never writes.** No screen in this spec appends a play-log entry. The tool must generate types for it, validate it, round-trip it without loss, include it in snapshots and in `export`'s envelope, and render nothing. That is the honest scope — this is groundwork for PSD-0002, and pretending otherwise would invite someone to build a UI for an always-empty array. When it does get a surface, the likely home is a third mode on §7.13, which D19 deliberately left unstructured.
+
+**Restore must not rewind the play log.** This is the one interaction that would otherwise be a silent data-integrity bug. D20 makes `restore --at` reinstate the character document wholesale; if that included `play_log`, restoring to a revision from before a patch was applied would erase the record of applying it, and the next `patch apply` would re-offer ops the player has already taken — the exact double-award PSD-0002's idempotency exists to prevent. So **`play_log` is preserved across restore rather than replaced**, and it is the only field with that exemption.
+
+The asymmetry with `build_log` is deliberate and worth stating: build decisions *are* sheet state, so rewinding a sheet should rewind them. The play log records things that happened in the world — a session occurred, a patch was applied — and rewinding your character sheet does not un-happen the session. Restore's confirmation names the exemption.
+
 ## 7. Screen inventory
 
 Screens map onto the schema's top-level sections, grouped the way a player thinks about their sheet rather than the way the JSON nests. **Nine section screens (§7.2–§7.10) plus the Sheet Overview, two wizards, and the History screen.** Number keys `1`–`9` map to the nine section screens; the wizards and History are reached contextually and by keybinding respectively (§8.4).
@@ -268,7 +350,7 @@ Free-text and short-choice fields: character/player name, pronouns, alignment, a
 
 **Species, background, origin feat, and their dependent data are free-text throughout v1 (D13).** The catalog does not cover them, so the user types the species name, its sub-choice (lineage/legacy/ancestry), its traits, the background's granted skills and tool proficiency, and the equipment package into the corresponding schema fields as editable lists. `source_ref.is_homebrew` defaults to true, which is the honest representation of "the user typed this in"; the user can clear it and record a book/page instead.
 
-This is the largest remaining manual-entry burden in the tool, and it is a deliberate scope choice rather than an oversight — see §12.1.
+This is the largest remaining manual-entry burden in the tool, and it is a deliberate scope choice rather than an oversight — see §13.1.
 
 Appearance, backstory, and roleplay notes render through Glamour in view mode and drop into a Bubbles `textarea` on edit — the one screen where long prose is the dominant content shape.
 
@@ -500,6 +582,16 @@ CREATE TABLE catalog_entries (
 );
 CREATE INDEX idx_catalog_kind_name ON catalog_entries(entry_kind, name);
 
+-- Local feedback counters for §12. Deliberately NOT in the character document: that
+-- document is the portable artifact (exported, patched, one day synced), and usage
+-- data has no business travelling with it. Never leaves the machine.
+CREATE TABLE usage_counters (
+    key         TEXT PRIMARY KEY,   -- e.g. 'screen_entry.spellcasting', 'restore.invoked',
+                                    -- 'field_edit.proficiency_bonus', 'width_bucket.compact'
+    value       INTEGER NOT NULL DEFAULT 0,
+    updated_at  TEXT NOT NULL
+);
+
 CREATE TABLE schema_migrations (
     version     INTEGER PRIMARY KEY,
     applied_at  TEXT NOT NULL
@@ -508,7 +600,7 @@ CREATE TABLE schema_migrations (
 
 This keeps the schema report's document-database framing rather than fighting it: the `document` column *is* the aggregate root, and JSON1 functions project a few fields for indexing — never to decompose the document into a normalized relational shape. `dmosh character list` becomes `SELECT id, character_name, total_level, updated_at FROM characters WHERE deleted_at IS NULL ORDER BY character_name`, and the generated columns cannot drift because SQLite recomputes them on write.
 
-**Homebrew (D14).** `catalog_entries` holds seeded SRD content and user-created entries in one table, discriminated by `is_homebrew`. A "custom…" escape hatch in any picker writes a homebrew row, making that entry reusable by every character in the database instead of being retyped. There is no sharing or pack format yet (§12.2).
+**Homebrew (D14).** `catalog_entries` holds seeded SRD content and user-created entries in one table, discriminated by `is_homebrew`. A "custom…" escape hatch in any picker writes a homebrew row, making that entry reusable by every character in the database instead of being retyped. There is no sharing or pack format yet (§13.2).
 
 Migrations are numbered `.sql` files embedded via Go's `embed`, applied in order against `schema_migrations` at startup — independent of `character.schema.json`'s `schema_version`, which versions the document rather than the tables.
 
@@ -574,6 +666,8 @@ The derive package (§8.1) is table-driven against the schema report's worked ex
 
 Specific behaviours that need their own tests because they are easy to get subtly wrong: the undo stack's bound and its interaction with `Recompute` (undoing must restore derived values, not recompute them from a half-restored state); snapshot pruning keeping the union of "most recent 50" and "under 30 days" rather than the intersection; `purge` cascading to both `character_revisions` and `item_instances`, which fails silently if the `foreign_keys` pragma regresses; and the three `validate` exit codes.
 
+§6.1's `play_log` needs three, all cheap and all guarding against silent loss rather than visible failure: that a document carrying a populated `play_log` round-trips through load → mutate → save with every entry and every `resolutions[]` element intact; that a `resolutions[].kind` the tool has never heard of survives that round-trip unaltered, since PSD-0002's vocabulary is explicitly unstable; and that `restore --at` leaves `play_log` untouched while replacing everything else, which is the double-award guard and the one place a regression would be invisible until a player was awarded twice.
+
 D20 needs four. That opening a character issues no reads against `item_instances` — the regression that would quietly turn lazy into eager. That a snapshot taken while only a few items were lazily loaded still captures *all* of them, which is the specific way the lazy/shared combination could break and the reason the aggregation is done in SQL. That restore reinstates document and item set atomically, including the case where items were added after the snapshot and must disappear on restore. And that `export` → `import` round-trips items, with a bare-document import producing the missing-item pane rather than a crash.
 
 D18's resolution needs its own small suite, since it is the one behaviour driven by ambient state a test can easily get wrong by accident: each rung of the precedence ladder in isolation, the ambiguous-name error, the soft-deleted-target error, and — most importantly — an assertion that every lifecycle command still fails without an explicit argument *while `DMOSH_CHARACTER` is set*. That last case is the regression that would quietly reintroduce the footgun the carve-out exists to prevent.
@@ -581,6 +675,8 @@ D18's resolution needs its own small suite, since it is the one behaviour driven
 `dmosh character validate --all` against a seeded fixture database is a CI gate, as is `go generate` cleanliness (§6).
 
 ## 11. Phased delivery
+
+**Phase 0 — schema prerequisite.** The `play_log` change to `character.schema.json` (§6.1), the `schema_version` bump to `1.1.0`, and regenerated types. No behaviour, no screens; it exists so that D9's codegen and the round-trip corpus are built against the final root shape rather than migrated to it later.
 
 **Phase 1 — the numeric sheet.** Sheet Overview, Identity & Background, Abilities & Saves, Skills & Proficiencies, Combat & Vitals, Currency, the creation wizard, in-session undo and snapshots (§8.6), and the full non-interactive command set. Manual entry throughout; no catalog. Covers the numeric heart of a paper sheet and is independently useful.
 
@@ -592,7 +688,33 @@ Sequencing 2a before 2b is deliberate: the catalog's picker requirements are the
 
 **Phase 3.** The History screen (§7.13 — one screen, two modes, log lines), reputation/renown, import from other tools' export formats. Multi-character and sync-aware features wait for the server component and are a different tool that happens to read the same database.
 
-## 12. Open questions
+## 12. What v1 is built to find out
+
+There is no telemetry (§2), so feedback has to be a deliberate artifact. `dmosh character feedback --out FILE` writes a local, reviewable markdown summary from the `usage_counters` table (§9.1) — screens entered, which fields get edited, wizard versus escape-hatch level-ups, undo and restore use, terminal widths seen. The player reads it in full and decides whether to share it. Nothing leaves the machine on its own.
+
+**The counters live in the database, not in the character document.** That document is the portable artifact — exported, patched, one day synced — and usage data has no business travelling with it. Keeping them in a sibling table is also what lets this section exist without touching `character.schema.json`, which has survived every revision of this spec unchanged (§0).
+
+The README carries the questions v1 is designed to answer:
+
+1. **Is this used at the table during play, or between sessions for bookkeeping?** The whole shape of Phase 2 assumes the former: §7.6's `+`/`-` HP adjusters, §7.8's one-key cast action, §7.7's rest panel are all built for speed under time pressure. *Instrument:* each run is classified at exit as combat-dominant (HP, slots, resources, conditions) or sheet-dominant (identity, inventory, proficiencies, currency) and increments one of two counters. *Direction:* if runs are overwhelmingly sheet-dominant, keystroke economy in the runner-ish screens was the wrong investment and the tool should optimise for review, printing, and export instead.
+
+2. **Does D2's no-rules-tables boundary hold, or does the tool feel like it isn't pulling its weight?** This is the largest bet in the document. *Instrument:* edit counts on the fields the tool deliberately refuses to compute — proficiency bonus, slot maxima, prepared maxima, carrying capacity — plus use of the §8.2 override fields. *Direction:* frequent proficiency-bonus edits at moments that aren't level-ups mean players are correcting it after the fact, which is the cheapest possible argument for deriving it from level and the one table most likely to earn an exception. Heavy `armor_class.override` use means the named-breakdown-terms model is wrong rather than the arithmetic.
+
+3. **Does manual entry stop people finishing a character?** D1 deferred the catalog and D13 narrowed it so species, backgrounds, and feats stay free-text indefinitely (§7.2). That is the largest remaining typing burden and it is entirely a guess that players tolerate it. *Instrument:* characters created versus characters still being edited a week later, and how many reach level 2. *Direction:* if abandonment clusters immediately after the creation wizard, Phase 2b is urgent and its scope should widen to cover exactly the fields §13.1 leaves open. If completion rates are fine, the manual-entry burden is theoretical and the catalog can stay narrow.
+
+4. **Do players use the level-up wizard, or bypass it?** §7.12's entire claim is sequencing and completeness, and §7.5's escape hatch makes bypassing easy on purpose. *Instrument:* `build_log` entry count against observed level changes — a level 5 character with two log entries was levelled by escape hatch. *Direction:* if bypass is the norm, the wizard's claim is false, and both the build log and §7.13's Decisions mode are built on sand. That would be worth knowing before Phase 3 builds a screen to browse them.
+
+5. **Does anyone ever restore a snapshot?** D17 and D20 bought a revisions table, an `items` column, and atomic restore. *Instrument:* `restore` invocations, and how deep the in-session undo stack actually gets. *Direction:* if no one restores across a whole campaign, snapshots are dead weight, pruning can be far more aggressive than §8.6's defaults, and §7.13 collapses to one mode. If restores do happen, what a player was doing just before one says what the tool let them break.
+
+6. **Which sections do players actually open?** *Instrument:* screen-entry counters per section. *Direction:* reputation and renown were cut from v1 (§1) on the reasoning that they are DM-facing; players asking for them is the signal to reconsider. Conversely, a section nobody opens is a candidate for folding into the Sheet Overview rather than costing a number key.
+
+7. **What terminal width do people actually run at?** D12 bought three layout tiers and a hard 80-column floor. *Instrument:* width bucket at startup. *Direction:* if nothing is ever below 120, `Compact` was wasted work and future screens can assume two panes; if 80 is common, the tier discipline stays mandatory and narrow layouts need designing first rather than last.
+
+8. **Does the environment-variable ergonomic get used?** D18's `.envrc`-per-player-folder pattern is a guess about how people organise campaigns. *Instrument:* how often a command resolves its target from `DMOSH_CHARACTER` rather than an argument. *Direction:* this one informs more than this tool — the GM subsystem leans on the same shape for `--db`, so evidence here is evidence there before that spec commits further.
+
+**Question 1 is load-bearing.** If the tool turns out to be a between-sessions companion rather than a table companion, Phase 2's interaction-heavy screens are still worth building but stop being the product's centre of gravity, and the roadmap should turn toward export, print, and sharing instead. Question 2 is the one most likely to force reversing a stated decision, and it is deliberately the easiest to act on: D2 is a boundary, not an architecture, and moving it costs one function.
+
+## 13. Open questions
 
 Two remain. Each is deferred by choice, with the reason stated.
 
