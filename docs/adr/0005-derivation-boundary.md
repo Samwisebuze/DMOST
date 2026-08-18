@@ -4,7 +4,7 @@ title: Derived values are arithmetic over inputs, never rules tables
 updated: 2026-08-18
 status:
   - kind: proposed
-  - version: v0
+  - version: v0.1
 related:
   - docs/psd/0001_character-management-tui.md
   - docs/jsonschema/character/v1alpha/abilities.schema.json
@@ -18,7 +18,12 @@ related:
 instrumentation to find out whether it was right. This record states the boundary; it does not claim
 the bet is won.
 
-**Revisions.** v0 — initial draft.
+**Revisions.**
+
+- **v0** — initial draft.
+- **v0.1** — review pass. v0 listed the computed set but not the order it is computed in, which is
+  underspecified for chained fields and genuinely ambiguous for overrides (§6). Also relocates the one
+  rules-shaped default PSD-0001 admits to, which v0's "closed set" claim could not survive (§7).
 
 ## Context
 
@@ -115,6 +120,50 @@ screen renders the computed value struck through and the override prominent, wit
 clear it and return to computed. Never a silent "the number changed because you cleared something
 three fields away".
 
+### 6. Evaluation order and override semantics are part of the contract
+
+Derived fields chain: ability modifier feeds save total, skill total, and spell save DC; skill total
+feeds passive scores; per-entry weight feeds container roll-ups feeds carried total feeds encumbrance
+tier. `Recompute` is therefore not a set of independent formulas but a single pass in dependency order,
+and the order is:
+
+1. ability totals → ability modifiers
+2. saves, skills, initiative, spell save DC and attack bonus
+3. passive scores
+4. inventory per-entry weights → container roll-ups → carried total → attunement used → encumbrance
+5. coin weight and currency `derived` totals
+
+One pass, no fixed-point iteration, because nothing in the closed set is cyclic. A future computed
+field that would create a cycle is a change to this record.
+
+**The two overrides in the schema behave differently, and v0 read as though they were the same.**
+
+| override | scope |
+| --- | --- |
+| `abilities.*.override_score` | replaces the total *and propagates* — every modifier, save, skill, passive score and spell DC downstream uses the overridden value |
+| `combat.armor_class.override` | replaces `armor_class.total` and is **terminal** — nothing in the closed set reads AC |
+
+That asymmetry is a property of the schema rather than a choice made here, but it has to be written
+down: an implementer who made `override_score` terminal would produce a sheet whose STR was 20 and
+whose Athletics bonus still said 14, and no test in the exhaustive list would necessarily catch it.
+The Vesk Ambermarch fixture (ARD 0009) needs an override case for exactly this reason.
+
+### 7. The one rules-shaped default lives outside `derive`
+
+PSD-0001 §7.7 admits one exception to the no-rules stance: hit dice recovery on a long rest defaults to
+half the pool total rounded down, editable per pool. It calls this "the one rules-shaped default in the
+tool", and it is editable "precisely because it is a rule the tool shouldn't be certain about".
+
+It does not go in `derive`. Rest is an *action* — it moves `current` toward `maximum` for pools whose
+trigger matches, and proposes a hit-dice figure the user can change — and actions belong to the screen
+that offers them (§7.7's rest panel). Putting it in `derive` would mean the closed set in §1 has an
+exception in it, and a closed set with one exception is how the second exception gets argued for.
+
+The distinction that keeps this honest: `derive` answers "what do these inputs add up to", and its
+output is a function of the document alone. Rest answers "what should these values become now", and its
+output depends on an event. Only the first is idempotent, and only the first can be compared against
+stored state to produce `validate`'s exit code 2.
+
 ## Consequences
 
 - **The tool will feel like it isn't pulling its weight, to some users, in a way that is measurable.**
@@ -129,3 +178,10 @@ three fields away".
 - **Every input the tool refuses to compute is an input the user can get wrong**, and the tool will
   faithfully propagate it. The mitigation is Phase 2b's read-only reference lines (§7.3, §7.8), which
   put the ladder on screen without applying it.
+- **Proficiency bonus is the sharpest instance of that**, and worth naming separately: it is an input,
+  and it appears in six of the formulas in §1. A PB left at 2 after reaching level 5 makes every save,
+  every proficient skill, every passive score, and every spell save DC quietly wrong together, and
+  `validate` reports nothing because a stale input is not drift. This is the specific failure §12
+  question 2 is instrumented to detect, and the argument that would move the boundary.
+- **`validate` exit code 2 covers computed fields only.** Drift means "stored disagrees with
+  recomputed". An input that disagrees with the rules has no detector by construction.
