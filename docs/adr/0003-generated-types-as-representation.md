@@ -4,7 +4,7 @@ title: Generated schema types are the in-memory representation
 updated: 2026-08-18
 status:
   - kind: proposed
-  - version: v0
+  - version: v0.1
 supersedes:
   - ARD-0001 decision 6 — section-scoped view models, not the generated CharacterSchema
 related:
@@ -20,7 +20,13 @@ related:
 **Proposed.** It reverses what ARD 0001 called its load-bearing decision, so the reasoning below is
 mostly an argument with that record.
 
-**Revisions.** v0 — initial draft.
+**Revisions.**
+
+- **v0** — initial draft.
+- **v0.1** — review pass. v0 conceded ARD 0001's guarantee in the abstract and left the replacement to
+  a test; the audit in §5 measures what is actually lost against
+  `internal/dto/v1alpha/character/character.gen.go`. Two losses are real and one of them fires on a
+  load-and-save with no user edit at all.
 
 ## Context
 
@@ -119,13 +125,69 @@ project document, asserted by a `go generate` check. Regenerating the tree and r
 `git diff --exit-code` is a CI job. A schema edit that lands without a regenerated tree is the
 failure mode D9 is buying protection against, and it is only protection if something fails.
 
+### 5. Audit: what a whole-document round trip actually loses
+
+ARD 0001's fear was correct in principle and worth measuring rather than restating. Two findings, both
+from the generated file as it stands today.
+
+**Finding 1 — schema-legal extra keys are lost unevenly.** `additionalProperties: false` appears three
+times across the fourteen schema files: once at `character.schema.json`'s root, once in
+`abilities.schema.json`, once in `spellcasting.schema.json`. Every other object is open, so an extra
+key inside `combat`, `inventory.entries[]`, `identity`, or `currency` is *valid* against the schema —
+and whether it survives a round trip depends on what the generator happened to emit for that object.
+Where it emitted `map[string]interface{}` (64 occurrences) the key survives. Where it emitted a struct
+(73 of them) the key is dropped:
+
+```go
+type CombatArmorClassBreakdownElem struct {
+	Label *string `json:"label,omitempty,omitzero" …`
+	Value *int    `json:"value,omitempty,omitzero" …`
+}
+```
+
+A breakdown term carrying `{"label":"Shield","value":2,"source_item_id":"…"}` loses the third key on
+save, silently, and the document stays schema-valid so nothing reports it.
+
+The root is the one level that is safe, and it is safe for the opposite reason: `additionalProperties:
+false` means an unknown root field makes the document *invalid*, so ARD 0004's `play_log` had to be a
+schema change rather than a tolerated extra — and so the failure at that level is loud.
+
+**The durable fix is `additionalProperties: false` throughout the schema**, which converts every one
+of these from a silent drop into a validation error naming the pointer. That is a schema change with a
+real cost — documents relying on an open object become invalid, and every hand-written fixture has to
+be exact — so it belongs in the Phase 0 pass alongside ARD 0004, where the format changes once, rather
+than being discovered per section during Phase 1. Until it lands, the round-trip corpus (ARD 0009) is
+the only thing standing between this decision and ARD 0001's stated failure mode.
+
+**Finding 2 — the generator injects a default, and it lands in the document.** Exactly one today:
+
+```go
+if v, ok := raw["slots_maximum"]; !ok || v == nil {
+	plain.SlotsMaximum = 3
+}
+```
+
+`CombatAttunement.SlotsMaximum` is a plain `int` tagged `omitempty,omitzero`, so a document that
+omitted `combat.attunement.slots_maximum` decodes to 3 and **re-encodes with `"slots_maximum": 3`
+written in**. The value is right — §7.9 calls the attunement maximum user-entered with a default of 3
+— but the write is silent, needs no user edit, and will happen on the first debounced autosave after
+merely opening a sheet. That is the "no silent mutation of live sheets" stance the schema report takes
+and §6 inherits, broken by the decode path rather than by any screen.
+
+The resolution is at the schema, not in Go: the creation wizard writes `slots_maximum` explicitly, and
+the Phase 0 pass reconciles schema default against generator behaviour so there is nothing left to
+inject. The round-trip test asserts that load → save changes nothing but key order and whitespace,
+which means **it fails today on this field**, and that is the point of writing it first.
+
 ## Consequences
 
 - **ARD 0001's guarantee is deliberately given up, and something must replace it.** A whole-document
   round trip through generated structs cannot preserve what the structs have no field for. The
-  replacement is the round-trip corpus in §10 and ARD 0009 — fixtures that go load → mutate → save →
-  validate and are compared byte-for-byte where the schema permits. A guarantee enforced by tests is
+  replacement is two things, not one: the round-trip corpus in §10 and ARD 0009, and §5's schema
+  tightening that turns the remaining holes into validation errors. A guarantee enforced by tests is
   weaker than one enforced by never decoding, and that is the trade.
+- **Phase 0 grows.** It is no longer just `play_log`: `additionalProperties: false` throughout, and
+  the attunement default, are the same kind of change and want the same single format bump (ARD 0004).
 - **The editor gains compile-time knowledge of the sheet, which is the entire point.** Nine section
   screens (§7.2–§7.10) and a derive package (ARD 0005) reach named fields. Under ARD 0001 each of
   those was a hand-written struct plus a hand-written decode per section.
