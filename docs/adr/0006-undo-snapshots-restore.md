@@ -4,7 +4,7 @@ title: Undo is in-session; history is snapshots that write forward
 updated: 2026-08-18
 status:
   - kind: proposed
-  - version: v0.1
+  - version: v0.2
 related:
   - docs/psd/0001_character-management-tui.md
   - docs/adr/0002-character-document-store.md
@@ -25,6 +25,10 @@ domain under one revision — the property that makes restore expressible as a s
   actually fires a snapshot is more frequent than "validated save" suggests (§6), a restored revision
   is indistinguishable from an ordinary one in the table (§7), and nothing said where the `summary`
   text comes from (§8).
+- **v0.2** — realigned to ARD 0002 v0.2. Nothing about the mechanism changes; what changes is who owns
+  each half of it. Snapshots are a `Save` option on the repository port, and `restore` is orchestration
+  in `pkg/app` rather than a store operation — which is what keeps the `play_log` splice out of a
+  storage adapter.
 
 ## Context
 
@@ -67,8 +71,8 @@ character and breaking job control for users who expect it.
 
 ### 2. Snapshots are written by validated saves, in the same transaction
 
-Every validated save inserts a `character_revisions` row inside the transaction that carries the
-`UPDATE`. Debounced autosaves do not snapshot — they fire every few seconds and would swamp the table
+A validated save passes `WithSnapshot(summary)` to `CharacterRepository.Save` (ARD 0002 §2), and the
+adapter inserts the `character_revisions` row inside the transaction that carries the `UPDATE`. Debounced autosaves do not snapshot — they fire every few seconds and would swamp the table
 (ARD 0007 owns the autosave rule).
 
 Same transaction, not a follow-up write, because a snapshot that can be absent for a save that
@@ -93,14 +97,19 @@ design and the reason the aggregation is not done in Go.
 
 ### 4. Restore writes forward, and replaces document and items atomically
 
-`restore --at <timestamp|revision>` deletes the character's current `item_instances` rows, reinserts
-them from the snapshot's `items` array, writes the snapshot's document, and advances `doc_revision` —
-all in one transaction.
+`restore --at <timestamp|revision>` is composed in `pkg/app` from two port calls: read the revision, then
+`Save` the character carrying the snapshot's document and its item set, which advances the version and
+replaces the stored items in one transaction (ARD 0002 §1, §2).
+
+Composed rather than a single port method because the restored document is not quite the snapshot's: the
+current `play_log` is spliced back into it first, per ARD 0004 §5. That splice is knowledge of one field
+inside the sheet, and it belongs above the adapter — ARD 0002 §8 keeps exactly one such crack open, and
+this is not it.
 
 Writing forward rather than rewinding the counter is what makes restore itself undoable: the restored
 state is a new revision, the revision it came from is still there, and a restore made in error is
-answered by another restore. It also keeps the revision sequence monotonic, which ARD 0002's
-optimistic-concurrency predicate depends on.
+answered by another restore. It also keeps the revision sequence monotonic, which the aggregate's
+compare-and-set depends on.
 
 There is no partial-restore state and no restore-induced dangling reference: items added after the
 snapshot disappear, items present at the snapshot come back, and the document's
