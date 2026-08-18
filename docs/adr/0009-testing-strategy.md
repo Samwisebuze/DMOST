@@ -4,7 +4,7 @@ title: Four test layers, with the round-trip corpus load-bearing
 updated: 2026-08-18
 status:
   - kind: proposed
-  - version: v0
+  - version: v0.1
 supersedes:
   - ARD-0001 decision 9 — model unit tests plus golden View() snapshots, teatest rejected
 related:
@@ -21,7 +21,12 @@ related:
 PSD-0001 §10 adopts it — and keeps that record's two best ideas about how to make terminal snapshots
 stable.
 
-**Revisions.** v0 — initial draft.
+**Revisions.**
+
+- **v0** — initial draft.
+- **v0.1** — review pass. The known-good fixture layer 3 is built on does not exist in this repository
+  (§7), and layer 5 needs its comparison defined before it can be written, because the obvious one is
+  unattainable and the next-obvious one hides exactly the loss it is there to catch (§8).
 
 ## Context
 
@@ -122,10 +127,65 @@ Plus the regressions that are invisible when they break, each traceable to the r
 | every lifecycle command still fails without an explicit argument **while `DMOSH_CHARACTER` is set** | quietly reintroduces the footgun the carve-out exists to prevent | ARD 0008 |
 | each rung of both precedence ladders in isolation, plus ambiguous-name and soft-deleted-target errors | ambient state is easy to get wrong by accident | ARD 0008 |
 
-### 6. Two CI gates
+### 7. The known-good fixture has to be written; it does not exist
+
+PSD-0001 §10 specifies layer 3 as "table-driven against the schema report's worked example ('Vesk
+Ambermarch') as a known-good fixture", and both PSD-0001 and PSD-0002 carry
+`docs/psd/share/2024-character-schema-report.md` in their `related` lists as the schema report.
+
+That file is not a schema report. It is a copy of PSD-0002, the GM Session Tool spec, front matter and
+all — added by `e3ec7ac doc(docs/psd): publish 0002 GM Session Tool` — and its own front matter points at
+`docs/psd/share/dnd-2024-character-schema-report.md`, which this repository has never contained. The name
+"Vesk Ambermarch" appears nowhere in it. So the worked example that layer 3, the derive contract, and
+several citations across PSD-0001 (§5.3's optionality rule, §7.8's "Part 4", §9.4's "Part 2", §7.10's
+stance on currency normalization) all rest on is not available to anyone implementing this.
+
+Two consequences for the test strategy, and one for someone else:
+
+- **The fixture is authored, not extracted.** A schema-valid 2024 character with hand-computed outputs,
+  living in `testdata/`, reviewed once as arithmetic and then trusted. It is a fixture either way; the
+  difference is that nobody can pretend it was validated against a report they cannot read.
+- **`internal/test/testdata/character.v1alpha.json` is not it.** That document exists, is named
+  "Bruenor", and carries eleven of the root sections — it is the daemon's minimum-viable valid sheet, not
+  a worked example with derived outputs to check against. Layer 3 needs a second, richer fixture; the
+  multiclass and spellcasting cases in §5 want the same one.
+- **Recovering or writing the actual schema report is outside this record**, but PSD-0001 cites it as
+  authority for decisions this series has now built on, and someone should know that the citation
+  currently resolves to the wrong document.
+
+### 8. Round-trip comparison is semantic JSON equality, not bytes
+
+ARD 0003 §5 says the corpus compares "byte-for-byte where the schema permits", and that qualifier hides a
+problem: byte comparison is unattainable here. Go's `encoding/json` sorts map keys on output, 64 of the
+generated declarations are maps, and ARD 0003's whole design re-encodes from a decoded tree — so key
+order and whitespace differ from the input by construction, on every document, always.
+
+The comparison is therefore **semantic JSON equality** — decode both sides to `interface{}` and compare —
+which happens to be exactly the right sensitivity:
+
+| difference | byte compare | semantic compare |
+| --- | --- | --- |
+| key order, whitespace | fails (noise) | passes (correct) |
+| a dropped nested key (ARD 0003 finding 1) | fails | **fails** |
+| an injected default (ARD 0003 finding 2) | fails | **fails** |
+| `1.0` becoming `1` | fails | fails, if numbers are compared as decoded |
+
+The last row is why the decode uses `UseNumber` on both sides: comparing through `float64` would let a
+number change shape unnoticed, and `internal/jsonmerge` already made this choice for the same reason.
+
+So `assert.JSONEq`-style comparison is the tool, and the two losses ARD 0003 measured are both things it
+catches. Byte-level fidelity is not a property this design has, and the corpus should not pretend to test
+for one.
+
+### 9. Two CI gates
 
 `go generate` cleanliness — regenerate, `git diff --exit-code` — so a schema edit cannot land without
 regenerated types (ARD 0003). And `dmosh character validate --all` against a seeded fixture database.
+
+The second gate needs one caveat, because ARD 0007 makes it easy to misread: a store the TUI has been
+editing may legitimately contain invalid documents, so this gate is meaningful **only** against a
+database the test seeds itself. Pointed at a real store it would report the user's mid-edit sheet as a
+build failure. The seeding belongs in the test, not in a checked-in `.db` file.
 
 ## Consequences
 
@@ -135,5 +195,8 @@ regenerated types (ARD 0003). And `dmosh character validate --all` against a see
   files rather than to have avoided the dependency.
 - **Goldens are review artifacts**, so they have to stay small enough that a human reads the diff. That
   constrains layer 2 more than layer 1.
+- **Layer 3 cannot be written until someone authors its fixture** (§7), and that is now the first task in
+  Phase 1's testing work rather than an assumed input.
+- **A citation in both PSDs resolves to the wrong document**, which this record can note but not fix.
 - **Every record in this series ended up owing this one a test**, which is the honest cost of a design
   whose guarantees are mostly behavioural.
