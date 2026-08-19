@@ -4,7 +4,7 @@ title: Generated schema types are the in-memory representation
 updated: 2026-08-18
 status:
   - kind: proposed
-  - version: v0.1
+  - version: v0.2
 supersedes:
   - ARD-0001 decision 6 — section-scoped view models, not the generated CharacterSchema
 related:
@@ -27,6 +27,10 @@ mostly an argument with that record.
   a test; the audit in §5 measures what is actually lost against
   `internal/dto/v1alpha/character/character.gen.go`. Two losses are real and one of them fires on a
   load-and-save with no user edit at all.
+- **v0.2** — §5's proposed tightening is withdrawn by ARD 0011: the character schema stays open through
+  `v1alpha`, so the silent-drop finding is answered by preserving unknown keys on save rather than by
+  rejecting the documents that carry them. Also corrects §5's open/closed counts (31 declarations, not
+  64 — the rest are discarded locals).
 
 ## Context
 
@@ -135,8 +139,11 @@ times across the fourteen schema files: once at `character.schema.json`'s root, 
 `abilities.schema.json`, once in `spellcasting.schema.json`. Every other object is open, so an extra
 key inside `combat`, `inventory.entries[]`, `identity`, or `currency` is *valid* against the schema —
 and whether it survives a round trip depends on what the generator happened to emit for that object.
-Where it emitted `map[string]interface{}` (64 occurrences) the key survives. Where it emitted a struct
-(73 of them) the key is dropped:
+Where it emitted `map[string]interface{}` the key survives; where it emitted a struct the key is
+dropped. The ratio is worse than a grep suggests: `map[string]interface{}` appears 64 times, but 33 of
+those are `var raw` locals inside `UnmarshalJSON` that are discarded and preserve nothing. The counts
+that matter are **31** open map declarations against **73** structs, so roughly seven in ten of the
+sheet's objects drop what they do not declare:
 
 ```go
 type CombatArmorClassBreakdownElem struct {
@@ -148,16 +155,21 @@ type CombatArmorClassBreakdownElem struct {
 A breakdown term carrying `{"label":"Shield","value":2,"source_item_id":"…"}` loses the third key on
 save, silently, and the document stays schema-valid so nothing reports it.
 
-The root is the one level that is safe, and it is safe for the opposite reason: `additionalProperties:
-false` means an unknown root field makes the document *invalid*, so ARD 0004's `play_log` had to be a
-schema change rather than a tolerated extra — and so the failure at that level is loud.
+v0 held the root to be the one safe level, on the reasoning that `additionalProperties: false` there
+makes an unknown root field *invalid*, so the failure is loud. Two corrections: nothing enforces it —
+the only validator decodes without `DisallowUnknownFields` — and ARD 0011 opens the root by decision.
+The root is now the same as every other level, and ARD 0004's sequencing rests on regeneration alone.
 
-**The durable fix is `additionalProperties: false` throughout the schema**, which converts every one
-of these from a silent drop into a validation error naming the pointer. That is a schema change with a
-real cost — documents relying on an open object become invalid, and every hand-written fixture has to
-be exact — so it belongs in the Phase 0 pass alongside ARD 0004, where the format changes once, rather
-than being discovered per section during Phase 1. Until it lands, the round-trip corpus (ARD 0009) is
-the only thing standing between this decision and ARD 0001's stated failure mode.
+**v0 proposed `additionalProperties: false` throughout the schema as the durable fix**, converting
+every one of these from a silent drop into a validation error naming the pointer, scheduled into ARD
+0004's Phase 0 bump. **That fix is withdrawn — see ARD 0011.** A closed schema makes every future field
+addition invalidate the documents written before it, which is the wrong trade for a format still
+moving under an alpha tool.
+
+The measurement above stands, and withdrawing the fix makes it worse rather than moot: loud rejection
+is replaced by silent deletion, and the round-trip corpus (ARD 0009) goes from one defence of two to
+the only one. ARD 0011 §1 reassigns the problem from the schema to the representation — the save path
+has to preserve keys the generated tree has no field for — and §2 names the mechanism.
 
 **Finding 2 — the generator injects a default, and it lands in the document.** Exactly one today:
 
@@ -183,11 +195,12 @@ which means **it fails today on this field**, and that is the point of writing i
 
 - **ARD 0001's guarantee is deliberately given up, and something must replace it.** A whole-document
   round trip through generated structs cannot preserve what the structs have no field for. The
-  replacement is two things, not one: the round-trip corpus in §10 and ARD 0009, and §5's schema
-  tightening that turns the remaining holes into validation errors. A guarantee enforced by tests is
+  replacement was two things; ARD 0011 withdrew one of them, leaving the round-trip corpus of ARD 0009
+  and the preservation obligation ARD 0011 §1 puts on the save path. A guarantee enforced by tests is
   weaker than one enforced by never decoding, and that is the trade.
-- **Phase 0 grows.** It is no longer just `play_log`: `additionalProperties: false` throughout, and
-  the attunement default, are the same kind of change and want the same single format bump (ARD 0004).
+- **Phase 0 grows, but less than v0.1 thought.** Beyond `play_log` it carries the attunement default —
+  the same kind of change, wanting the same single format bump (ARD 0004). The schema tightening this
+  record proposed alongside it is withdrawn by ARD 0011, which keeps the bump additive.
 - **The editor gains compile-time knowledge of the sheet, which is the entire point.** Nine section
   screens (§7.2–§7.10) and a derive package (ARD 0005) reach named fields. Under ARD 0001 each of
   those was a hand-written struct plus a hand-written decode per section.
