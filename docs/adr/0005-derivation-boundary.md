@@ -1,12 +1,15 @@
 ---
 id: ARD-0005
 title: Derived values are arithmetic over inputs, never rules tables
-updated: 2026-08-18
+updated: 2026-08-19
 status:
   - kind: proposed
-  - version: v0.1
+  - version: v0.2
 related:
   - docs/psd/0001_character-management-tui.md
+  - docs/adr/0003-generated-types-as-representation.md
+  - docs/adr/0007-autosave-and-validation-gates.md
+  - docs/adr/0011-open-schemas-through-v1alpha.md
   - docs/jsonschema/character/v1alpha/abilities.schema.json
 ---
 
@@ -24,6 +27,11 @@ the bet is won.
 - **v0.1** — review pass. v0 listed the computed set but not the order it is computed in, which is
   underspecified for chained fields and genuinely ambiguous for overrides (§6). Also relocates the one
   rules-shaped default PSD-0001 admits to, which v0's "closed set" claim could not survive (§7).
+- **v0.2** — review pass. Two defects, both between the Decision line and §4. `Recompute` was declared
+  pure and given a `*Document`, and §4 listed the on-open path among the writers while requiring it not
+  to write — a combination ARD 0007's debounce turns into silent persistence (§2, §4). And §3 argued
+  derive shares the schema's versioned lifetime while the Decision named a package with no version in
+  its path (§3).
 
 ## Context
 
@@ -52,9 +60,9 @@ that modifies them, which is unbounded.
 
 ## Decision
 
-**`internal/character/derive` owns every computed field. The boundary is arithmetic over
-user-supplied inputs, with no rules tables. `Recompute(*Document) []Change` is pure, and the list of
-computed fields is a closed contract — anything not on it is an input.**
+**`internal/dto/v1alpha/character/derive` owns every computed field. The boundary is arithmetic over
+user-supplied inputs, with no rules tables. `Recompute` is pure and `Apply` is the only writer, and the
+list of computed fields is a closed contract — anything not on it is an input.**
 
 ### 1. The computed set, exhaustively
 
@@ -81,34 +89,78 @@ maximum, cantrips known, resource maxima, attunement slot maximum, spellcasting 
 That the list is closed is what makes it a boundary. A contributor adding a lookup is not making a
 judgement call; they are changing this record.
 
-### 2. One function, called from one place
+### 2. Computing and applying are two functions, and only one of them writes
 
-`Recompute` is pure — document in, `[]Change` out — and the parent model calls it after every
-mutation (PSD-0001 §5.1), so derived-state bugs have exactly one home. Child screens emit typed
-messages and never write derived fields themselves.
+```go
+func Recompute(doc Document) []Change       // pure: reads the document, writes nothing
+func Apply(doc *Document, changes []Change) // the only writer of a derived field
+```
+
+v0.1 declared `Recompute` pure and handed it a `*Document`, which is a contradiction no compiler
+catches and every caller resolves by guessing. It matters more here than that usually would. §4 gives
+the on-open path a banner *instead of* a write, and ARD 0007 §1 autosaves two seconds after any
+mutation — so a `Recompute` that quietly corrected the document while producing the banner would have
+that correction on disk before the user finished reading it, destroying the evidence §4 exists to
+preserve. The split is load-bearing, not stylistic.
+
+The parent model calls both after every mutation (PSD-0001 §5.1), so derived-state bugs still have
+exactly one home. Child screens emit typed messages and never write derived fields themselves.
 
 The `[]Change` return is not decoration: it is the same value `validate` needs to report drift and the
-TUI needs to show its on-open banner. One function produces the diff; three callers decide what to do
-with it.
+TUI needs to show its on-open banner. It is also, by construction, the list of keys derive owns — which
+is what a save path scoping ARD 0011 §2's preservation merge has to be able to name.
 
-### 3. It does not live in `pkg/domain`
+### 3. It lives beside the generated tree, on the schema's version line
 
 `pkg/domain/character` cannot see inside a sheet by design — `Character` is an aggregate and a
 `json.RawMessage`, and `NewCharacter`'s doc comment explains why. Derivation needs field-level
-knowledge of a specific schema version, which is the one thing that package is built not to have. So
-derive sits with the generated types (ARD 0003), under the same versioned lifetime as the schema it
-encodes.
+knowledge of a specific schema version, which is the one thing that package is built not to have.
 
-### 4. Write-back is restricted to three paths (D7)
+v0.1 concluded from that only where derive is *not*, named `internal/character/derive`, and argued in
+the same sentence that derive shares "the same versioned lifetime as the schema it encodes" —
+but `internal/character` has no version in its path, so the argument and the location disagreed. The
+argument is the half worth keeping. Every formula in §1 is a statement about `v1alpha` field names:
+`background_increase`, `feat_increases[]`, `counts_against_prepared_maximum`. A `v1beta` that renames
+one needs a *second* derive rather than an edited one, and both have to be able to exist at once while
+whatever migrates between them is written.
 
-`Recompute` runs in memory everywhere. Only three paths persist its output: the TUI on open (surfacing
-the diff as a banner rather than applying it silently), the TUI on any subsequent edit, and explicit
-`dmosh character recompute`.
+Derive is therefore a function of the versioned DTO and sits with it:
 
-`show` and `export` recompute for display only. `validate` compares stored against recomputed and
-reports drift as **exit code 2** without touching the row. Read commands therefore stay safe in a
-pipeline, `dmosh character show` against a database the TUI has open cannot write to it, and CI
-stays reproducible.
+```
+internal/dto/v1alpha/character/
+    character.gen.go     generated tree (ARD 0003)
+    types_manual.go      the two hand-written exceptions
+    derive/              the arithmetic in §1
+
+internal/character/      loading and validating; no field-level knowledge
+```
+
+ARD 0003 §1 is corrected to match — it placed derive under `internal/character` on the reasoning that
+the dto tree holds types and `internal/character` holds behaviour. That split is real and this is the
+exception to it, taken deliberately: a `dto` package gaining behaviour is a cost, and it is smaller
+than the alternative, which is a package whose correctness is defined by a schema version outliving
+that version and being edited in place when the next one lands.
+
+### 4. `Apply` has three call sites; `Recompute` runs everywhere (D7)
+
+`Recompute` runs on every path that displays or checks a sheet. `Apply` runs on three, and those are
+the only paths that persist a derived value:
+
+| path | `Recompute` | `Apply` | persists |
+| --- | --- | --- | --- |
+| TUI on open | yes — the diff is the banner | **no** | no |
+| TUI on any subsequent edit | yes | yes | yes, through the debounce (ARD 0007 §1) |
+| `dmosh character recompute` | yes | yes | yes, validated (ARD 0002 §3) |
+| `show`, `export` | for display | no | no |
+| `validate` | to compare | no | no — drift is **exit code 2** (ARD 0008 §7) |
+
+v0.1 listed the on-open path among the three that persist and then said it must not apply silently.
+It does not apply at all: the banner is the whole of what open does with the diff, and the stored
+document is unchanged until the user edits something — at which point the edit and the correction land
+together, in a state the user has seen.
+
+Read commands therefore stay safe in a pipeline, `dmosh character show` against a database the TUI has
+open cannot write to it, and CI stays reproducible.
 
 The banner-not-silent-fix rule on open matters more than it looks: a document whose stored `total_score`
 disagrees with its inputs is evidence of something, and quietly correcting it destroys the evidence.
@@ -170,8 +222,13 @@ stored state to produce `validate`'s exit code 2.
   PSD-0001 §12 question 2 instruments exactly this: edit counts on the fields the tool refuses to
   compute, plus override usage. Frequent proficiency-bonus edits away from level-ups is the cheapest
   possible argument for deriving it, and the one table most likely to earn an exception.
-- **Moving the boundary costs one function.** D2 is a boundary, not an architecture. That is the
+- **Moving the boundary costs one function.** D2 is a boundary, not an architecture: a field promoted
+  from input to computed is an entry in §1, a formula in `Recompute`, and nothing else. That is the
   property that makes this record safe to be wrong about.
+- **`Apply` being the only writer is a testable claim, and ARD 0009 tests it.** A `Recompute` that
+  mutates is the failure this record's §2 is written against, and it is invisible in every output the
+  TUI shows — the banner looks identical either way. The assertion is that a `Recompute` over a document
+  leaves that document byte-identical.
 - **Guard tests are load-bearing, not incidental.** A test asserting `Recompute` leaves
   `proficiency_bonus` untouched at a level where the 2024 table would change it is the only thing
   standing between this decision and a well-meaning contributor. ARD 0009 carries them.
