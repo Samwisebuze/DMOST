@@ -1,14 +1,16 @@
 ---
 id: ARD-0006
 title: Undo is in-session; history is snapshots that write forward
-updated: 2026-08-18
+updated: 2026-08-19
 status:
   - kind: proposed
-  - version: v0.2
+  - version: v0.3
 related:
   - docs/psd/0001_character-management-tui.md
   - docs/adr/0002-character-document-store.md
   - docs/adr/0004-play-log-schema-change.md
+  - docs/adr/0007-autosave-and-validation-gates.md
+  - docs/adr/0011-open-schemas-through-v1alpha.md
 ---
 
 # ARD 0006 — Undo is in-session; history is snapshots that write forward
@@ -29,6 +31,10 @@ domain under one revision — the property that makes restore expressible as a s
   each half of it. Snapshots are a `Save` option on the repository port, and `restore` is orchestration
   in `pkg/app` rather than a store operation — which is what keeps the `play_log` splice out of a
   storage adapter.
+- **v0.3** — review pass. §4 gains the step that its own undoability claim always assumed, and settles
+  restore against ARD 0011's preservation merge (§4). §2's trigger is realigned to §6's rather than left
+  contradicting it. §8 answers for the four writers that are not the parent model. And §7 placed a column
+  in a migration that does not contain the table (§7).
 
 ## Context
 
@@ -69,14 +75,19 @@ own test.
 `u` rather than `Ctrl+Z`, because `Ctrl+Z` is `SIGTSTP`: capturing it means disabling the tty's suspend
 character and breaking job control for users who expect it.
 
-### 2. Snapshots are written by validated saves, in the same transaction
+### 2. A snapshot is an option on the save, written in the same transaction
 
-A validated save passes `WithSnapshot(summary)` to `CharacterRepository.Save` (ARD 0002 §2), and the
-adapter inserts the `character_revisions` row inside the transaction that carries the `UPDATE`. Debounced autosaves do not snapshot — they fire every few seconds and would swamp the table
-(ARD 0007 owns the autosave rule).
+A save that snapshots passes `WithSnapshot(summary)` to `CharacterRepository.Save` (ARD 0002 §2), and
+the adapter inserts the `character_revisions` row inside the transaction that carries the `UPDATE`.
 
 Same transaction, not a follow-up write, because a snapshot that can be absent for a save that
 succeeded is not history, it is a suggestion.
+
+**Which saves pass it is §6's question, and the answer is narrower than "every validated save".** v0
+said validated save, which composes with PSD-0001 §8.5 into a snapshot on every navigation-away; §6
+separates the two and this heading no longer claims otherwise. Debounced autosave is excluded by
+construction rather than by rule — it is `SaveCharacterDraft`, not `ReplaceCharacter` (ARD 0002 §3,
+ARD 0007 §1), so there is no `WithSnapshot` for it to pass.
 
 ### 3. A snapshot captures the whole aggregate, assembled in SQL
 
@@ -95,21 +106,56 @@ SELECT :id, :rev, :document,
 (§7.9, §9.4) and complete snapshots compose rather than trade off. This is the subtlest thing in the
 design and the reason the aggregation is not done in Go.
 
-### 4. Restore writes forward, and replaces document and items atomically
+### 4. Restore snapshots the present, then writes the past forward
 
-`restore --at <timestamp|revision>` is composed in `pkg/app` from two port calls: read the revision, then
-`Save` the character carrying the snapshot's document and its item set, which advances the version and
-replaces the stored items in one transaction (ARD 0002 §1, §2).
+`restore --at <timestamp|revision>` is composed in `pkg/app` from three port calls:
+
+1. `Save` the current document with `WithSnapshot("before restore to r39")`, so the state being left
+   behind is itself a revision;
+2. `FindRevision` for the target;
+3. `Save` the character carrying that snapshot's document and its item set, which advances the version
+   and replaces the stored items in one transaction (ARD 0002 §1, §2).
+
+```
+r41  14:02  Combat — HP 24 → 11
+r42  14:40  before restore to r39     ← step 1
+r43  14:40  restored from r39         ← step 3, with §7's restored_from set
+```
 
 Composed rather than a single port method because the restored document is not quite the snapshot's: the
 current `play_log` is spliced back into it first, per ARD 0004 §5. That splice is knowledge of one field
 inside the sheet, and it belongs above the adapter — ARD 0002 §8 keeps exactly one such crack open, and
 this is not it.
 
-Writing forward rather than rewinding the counter is what makes restore itself undoable: the restored
-state is a new revision, the revision it came from is still there, and a restore made in error is
-answered by another restore. It also keeps the revision sequence monotonic, which the aggregate's
-compare-and-set depends on.
+**Step 1 is not bookkeeping.** v0.2 claimed a restore made in error is answered by another restore, and
+that holds only if the state the restore replaced is in the table — which §6 does not guarantee, on
+purpose: autosave and navigation-away advance `doc_revision` without snapshotting, so the document a
+restore overwrites may be in no revision at all. Requesting the snapshot unconditionally closes that,
+and it costs nothing when there is nothing to capture, because §6 already skips an insert whose document
+is byte-identical to the newest existing revision. A restore issued straight after `Ctrl+S` writes no
+extra row.
+
+Writing forward rather than rewinding the counter is what makes restore undoable: the restored state is
+a new revision, the revision it came from is still there, and the state it replaced is one row below it.
+It also keeps the revision sequence monotonic, which the aggregate's compare-and-set depends on.
+
+**Restore replaces the document; it does not merge into it.** ARD 0011 §2 obliges the ordinary save path
+to merge the re-encoded tree into the document it loaded, so that keys the generated tree has no field
+for survive an edit. Restore bypasses that merge. The two rules differ over exactly one class of data —
+a key no generated struct declares, valid under ARD 0011's open schema — and the difference is whether
+restore means "the sheet as it was" or "the sheet as it was, in the parts this build understands":
+
+| | replace (this record) | merge |
+| --- | --- | --- |
+| `combat.armor_class.total` | the snapshot's | the snapshot's |
+| `x_gm_notes`, no generated field | the snapshot's | **left at its current value** |
+| `play_log` | current, per ARD 0004 §5 | current |
+
+Merge would produce a document that existed at no point in time, with nothing on screen distinguishing
+the half that came from the snapshot from the half that did not. Replace costs the rewind of data this
+build cannot render — recoverably, because step 1 put those same keys in a revision seconds earlier.
+That recoverability is what makes the choice affordable, and it is the second reason step 1 is not
+optional.
 
 There is no partial-restore state and no restore-induced dangling reference: items added after the
 snapshot disappear, items present at the snapshot come back, and the document's
@@ -122,8 +168,9 @@ rewinding a sheet does not un-happen a session. Restore's confirmation names it.
 
 On insert: keep the most recent 50 revisions per character, **and** keep anything under 30 days old.
 A character saved heavily in one session keeps that session's detail; one saved occasionally over a
-year keeps a year of history. At ~30 KB a document, 50 revisions is ~1.5 MB per character, and `purge`
-reclaims it.
+year keeps a year of history. At ~30 KB a document, 50 revisions is ~1.5 MB per character before items
+— §3's snapshot carries the item set as well, so a character with a full inventory costs more — and
+`purge` reclaims it.
 
 Union rather than intersection is the whole rule, and it is easy to implement backwards. The numbers
 are tunable defaults; the union is not.
@@ -140,6 +187,12 @@ So the two are separated: **validation runs on navigation-away, snapshots do not
 written on explicit `Ctrl+S` and on session end, and an insert whose document is byte-identical to the
 newest existing revision is skipped rather than stored.
 
+**Session end is best-effort, and history should be read knowing it.** ARD 0007 §8 declines to promise a
+clean flush on `SIGHUP`, `SIGTERM` or a killed process, and this trigger inherits that exactly: `q` and
+`Ctrl+C` snapshot, a closed terminal does not. The work is not lost — autosave wrote it — but it is
+unmarked, so an evening that ended with the terminal window closing leaves a gap where a revision should
+be. That is one more reason the answer to "why is there no row here" is §6 rather than a bug.
+
 That makes a revision mean something a user can recognize — "I decided this was a good state" or "I
 finished a session" — instead of "I pressed Escape". It also makes §7.13's Revisions mode legible,
 since a list where forty of fifty entries are screen exits is not a history anyone reads.
@@ -151,9 +204,13 @@ identical documents and different numbers, and nothing distinguishing them. Hist
 `r42` and `r39` as unrelated saves, and `r42`'s `summary` would either be empty or a lie.
 
 `character_revisions` therefore carries one more column, `restored_from INTEGER`, null on an ordinary
-save and set to the source revision on a restore. History renders it (`r42  restored from r39`), and
-the confirmation prompt that names the `play_log` exemption can name the source too. Nothing has
-shipped, so this is a change to migration 1 rather than a migration of its own.
+save and set to the source revision on a restore. History renders it (`r43  restored from r39`), and
+the confirmation prompt that names the `play_log` exemption can name the source too.
+
+v0.1 called this "a change to migration 1", which it cannot be: the only shipped migration is
+`000001_create_characters_table`, and `character_revisions` does not exist yet — ARD 0002 §6 creates it
+in a new numbered pair. `restored_from` is simply a column in that pair, written before it ships.
+CLAUDE.md's rule that shipped migrations are never edited is untouched by any of this.
 
 ### 8. `summary` comes from the mutation, not from a diff
 
@@ -170,8 +227,26 @@ the strings above are all statements of intent rather than of delta.
 
 So the summary is composed from the typed mutation messages the parent model already applies (§5.1) —
 the screen that emitted them and the action they represent — accumulated since the last snapshot and
-rendered as "section — most significant action, plus N more". The model is the only place that knows
-intent, and it already sees every mutation in one place, which is the same property ARD 0005 relies on.
+rendered as "section — most significant action, plus N more". The model is the only place that *sees*
+every mutation in one place, which is the same property ARD 0005 relies on.
+
+**But the model is not the only writer, so `Summary` is a required field on the command.** ARD 0002 §3
+makes `ReplaceCharacter` the snapshotting use case, and five things reach it. For the four that are not
+the parent model the intent is not inferred at all — it is the command the user typed, which is at least
+as knowable:
+
+| writer | summary |
+| --- | --- |
+| TUI `Ctrl+S`, session end | accumulated per above — `Spellcasting — expended a 1st-level slot` |
+| wizard completion | `Level-up — Ranger 4 → 5, plus 6 more` |
+| `dmosh character import vesk.json` | `imported from vesk-ambermarch.json` |
+| `dmosh character restore --at r39` | `before restore to r39` (step 1) and `restored from r39` (step 3) |
+| `dmosh character recompute` | `recomputed 7 derived fields` |
+
+Required rather than optional because a nullable summary is answered by leaving it null, and a History
+mode where half the rows are blank is the thing §7 spent a section avoiding. A required field makes the
+next write path answer the question at compile time — which is the only moment anyone is thinking about
+what the row should say.
 
 ## Consequences
 
@@ -181,8 +256,12 @@ intent, and it already sees every mutation in one place, which is the same prope
 - **Restorable revisions are a sparse subset of the revision sequence**, and §6 makes them sparser
   still: autosave and navigation-away both advance `doc_revision` without snapshotting. History shows
   gaps, and they are honest.
-- **The parent model owes the store a summary on every save**, which is a coupling §8 accepts
-  deliberately: the store cannot compose that string, and no other component sees every mutation.
+- **Every write path owes the store a summary**, which is a coupling §8 accepts deliberately: the store
+  cannot compose that string, the model is the only component that can accumulate one, and the rest have
+  to state theirs. The cost is a required field on a command struct that four call sites fill with a
+  constant.
+- **A restore writes two revisions where v0.2 wrote one**, unless the byte-identical skip elides the
+  first. That is the price of the guarantee in §4, and it is paid in rows that pruning already bounds.
 - **Snapshot storage grows with editing, not with time**, and the only reclamation is `purge`, which
   is also the only path that deletes a character.
 - **Whether any of this is used is an open question with an instrument.** §12 question 5 counts
