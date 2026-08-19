@@ -1,10 +1,10 @@
 ---
 id: ARD-0002
 title: Align the character stack with PSD-0001, breaking it where needed
-updated: 2026-08-18
+updated: 2026-08-19
 status:
   - kind: proposed
-  - version: v0.3
+  - version: v0.4
 narrows:
   - ARD-0001 decision 7 — merge patches remain the wire's write shape, not the TUI's
 adopts:
@@ -38,6 +38,9 @@ decision 7 rather than reversing it.
 - **v0.3** — §9 narrowed by ARD 0010, which freezes `dmostd`. The daemon stays wired to `inmem` but
   stops obliging it to implement the whole widened port; `repotest`'s full contract runs against
   `sqlite`. Also corrects the port's method count — seven rows, nine methods.
+- **v0.4** — realigned to ARD 0006 v0.3. `ReplaceCharacter` carries a required `Summary`, because the
+  TUI is not the only caller that snapshots, and `restore` is two writes rather than one now that it
+  captures the state it is about to replace (§2, §3).
 
 ## Context
 
@@ -120,11 +123,12 @@ semantics depend on whether part of it was loaded is a subtlety that will catch 
 | `Purge(ctx, CharacterID)` | the only real `DELETE`, and the only one that cascades |
 | `Revisions(ctx, CharacterID)` and `FindRevision(ctx, CharacterID, selector)` | ARD 0006's history and the snapshot a restore reads |
 
-**`restore` is orchestration in `pkg/app`, not a port method.** It reads a revision, splices `play_log`
-from the current document per ARD 0004 §5, and calls `Save` — which writes forward as a new revision and
-carries the snapshot's item set. One write, so no transaction spans two port calls, and the splice
-stays above the adapter: preserving one JSON field is schema knowledge, and §8 is the only place this
-record lets that into a storage layer.
+**`restore` is orchestration in `pkg/app`, not a port method.** It snapshots the current document, reads
+the target revision, splices `play_log` from the current document per ARD 0004 §5, and calls `Save` —
+which writes forward as a new revision and carries the snapshot's item set. Two writes (ARD 0006 §4),
+each complete on its own, so no transaction spans two port calls; and the splice stays above the
+adapter, because preserving one JSON field is schema knowledge and §8 is the only place this record lets
+that into a storage layer.
 
 ### 3. `pkg/app` takes version-neutral commands
 
@@ -141,7 +145,11 @@ Two write use cases rather than one flag, because ARD 0007 needs them to differ 
 | use case | schema gate | snapshot |
 | --- | --- | --- |
 | `SaveCharacterDraft` — the 2s debounced autosave | none; the document must decode, nothing more (ARD 0007 §7) | no |
-| `ReplaceCharacter` — `Ctrl+S`, session end, `import`, wizard completion | full, with JSON Pointer paths | yes, with a summary |
+| `ReplaceCharacter` — `Ctrl+S`, session end, `import`, wizard completion, `restore`, `recompute` | full, with JSON Pointer paths | yes, always |
+
+`ReplaceCharacter`'s command carries a **required** `Summary`, since snapshotting is not optional on it
+and five call sites reach it — only one of which is the parent model that can compose one from
+mutations. ARD 0006 §8 has the strings and the reason a nullable field would not survive contact.
 
 `Patch` survives unchanged in purpose: it is the wire's partial-write shape, and ARD 0001 decision 7 is
 narrowed rather than superseded — merge patches stay for HTTP, and the TUI writes whole documents because
