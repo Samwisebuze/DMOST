@@ -1,10 +1,10 @@
 ---
 id: PSD-0001
 title: Character Management TUI
-updated: 2026-08-18
+updated: 2026-08-19
 status: 
     - kind: draft
-    - version: v0.6
+    - version: v0.6.1
 component: 
     - type: CLI
     - name: dmosh
@@ -45,6 +45,8 @@ related:
 **v0.4.6** — adds §12, *What v1 is built to find out*, following the GM session tool spec's §11 convention: a local `usage_counters` table, a `dmosh character feedback` command, and eight user-facing questions this version exists to answer. Open questions move to §13.
 
 **v0.4.5** — **D20 amended:** item instances now share the character's `doc_revision` rather than carrying their own. Lazy loading is unchanged. Amended in place rather than issued a new number, since it is the same decision reversing one of its two halves within one review cycle; the reversal and its consequences are recorded in *Corrections and inferences* below. This closes §13's item-snapshot question outright — restore is now complete by construction.
+
+**v0.6.1** — alignment patch, no decisions of its own. Four statements here were left contradicting the records that own them: ARD 0009 v0.2 specifies **five** test layers (it called itself four while listing five) and renumbered the fixture section to §6; and ARD 0005 v0.2 moved `derive` onto the schema's version line at `internal/dto/v1alpha/character/derive` and split `Recompute` from `Apply`, so §5.3 and §8.1 follow. The decisions were taken in those records; this revision copies them across.
 
 **v0.6** — two decisions taken after the ARD 0002–0009 review, both of which shrink Phase 0. `dmostd` is **frozen** until LAN server work begins, so the daemon stops obliging the in-memory adapter to implement a port only the TUI uses (D27, ARD 0010). And the character schema **stays open** through `v1alpha` — v0.5's `additionalProperties: false` tightening is withdrawn, on the reasoning that a field addition must not invalidate the documents written before it and an unsupported field should be carried rather than rejected (D26, ARD 0011). The second one moves work rather than removing it: unknown keys are only inert if the save path preserves them, which it does not do today.
 
@@ -123,7 +125,7 @@ The architecture records now carry the cross-cutting decisions that span package
 | ARD 0006 | undo, snapshots, restore (D23) | §8.6 |
 | ARD 0007 | unvalidated autosave, and the decodable-always invariant | §8.5, §6 |
 | ARD 0008 | the CLI shape and ambient resolution (D24) | §4 |
-| ARD 0009 | the four test layers, and the missing fixture | §10 |
+| ARD 0009 | the five test layers, and the missing fixture | §10 |
 
 ### Corrections and inferences
 
@@ -138,7 +140,7 @@ Six of these decisions had consequences that required changes beyond the section
 
 **v0.5 adds five more. All of them were found by writing the architecture records against the code rather than by re-reading this document, which is the argument for having written them:**
 
-7. **The schema report this document cites does not exist.** §5.3, §7.8, §7.10, §9.4 and §10 all cite "the schema report", and `related:` names `docs/psd/share/2024-character-schema-report.md`. That file is a copy of PSD-0002, front matter and all; its own front matter points at `dnd-2024-character-schema-report.md`, which this repository has never contained. The consequence that bites hardest is §10's: the "Vesk Ambermarch" worked example the derive tests are built on is not available to anyone implementing this, so the fixture has to be authored (ARD 0009 §7). The citations are left in place rather than deleted, because the reasoning they support is still the reasoning — but they resolve to the wrong document today and someone should fix that at the source.
+7. **The schema report this document cites does not exist.** §5.3, §7.8, §7.10, §9.4 and §10 all cite "the schema report", and `related:` names `docs/psd/share/2024-character-schema-report.md`. That file is a copy of PSD-0002, front matter and all; its own front matter points at `dnd-2024-character-schema-report.md`, which this repository has never contained. The consequence that bites hardest is §10's: the "Vesk Ambermarch" worked example the derive tests are built on is not available to anyone implementing this, so the fixture has to be authored (ARD 0009 §6). The citations are left in place rather than deleted, because the reasoning they support is still the reasoning — but they resolve to the wrong document today and someone should fix that at the source.
 8. **`play_log` has to be unpatchable over HTTP.** §6.1 protects the log from `restore` and stops there, because this spec only considers the local store. The daemon already serves `PATCH` over the same document, and a new root property is patchable by default — so `{"play_log": []}` would empty the idempotency record and let the next `patch apply` re-award everything. It joins `serverOwnedSheetKeys` (ARD 0004 §6).
 9. **§5.3's load order was backwards.** It said decode-then-validate-then-hydrate. The generated types reject bad input with Go type errors naming a Go type, and only the compiled JSON Schema produces the JSON Pointer paths §6 promises, so validation has to run first (ARD 0003 §2).
 10. **Unvalidated autosave needs a second, narrower invariant.** §8.5 lets the store hold a schema-invalid document, which is right; composed with the load path it also lets the tool write a document it cannot reopen, since the generated types refuse out-of-range numbers and unknown enum members on decode. So the rule is *decodable always, valid at the gates* — enforced by field-level input constraints in the editor — plus a recovery path on `open` (ARD 0007 §7).
@@ -278,7 +280,7 @@ Navigation is a stack, not a single enum, so `Esc` always returns to the prior s
 
 ### 5.3 Data layer
 
-Go types mirroring `character.schema.json` 1:1 — same field names in `snake_case` JSON tags, same optionality (a field typed `["string","null"]` is a pointer or nullable wrapper, never a bare string defaulting to `""`, because missing vs. empty vs. zero are meaningfully different states) — are **generated once, at `internal/dto/v1alpha/character`**, which is where the repository already generates them. `internal/character` holds the behaviour around that tree: loading, the compiled-schema validator, the hand-written exceptions, and `derive` (§8.1). It does not re-declare the types; a second tree generated from the same schema is the drift the codegen exists to prevent. Generation is covered in §6.
+Go types mirroring `character.schema.json` 1:1 — same field names in `snake_case` JSON tags, same optionality (a field typed `["string","null"]` is a pointer or nullable wrapper, never a bare string defaulting to `""`, because missing vs. empty vs. zero are meaningfully different states) — are **generated once, at `internal/dto/v1alpha/character`**, which is where the repository already generates them. `internal/character` holds the format-neutral behaviour around that tree: loading and the compiled-schema validator. The hand-written exceptions sit in the generated package itself — they replace declarations in it — and `derive` (§8.1) sits one level below it at `internal/dto/v1alpha/character/derive`, because every formula in it names `v1alpha` fields and a later version needs its own (ARD 0003 §1, ARD 0005 §3). It does not re-declare the types; a second tree generated from the same schema is the drift the codegen exists to prevent. Generation is covered in §6.
 
 **Persistence is the existing stack, extended — there is no `internal/store` (D22).** The layers, outward from the document:
 
@@ -536,7 +538,7 @@ Both modes render from data that already exists; **this screen requires no schem
 
 ### 8.1 Derived-value computation
 
-`internal/character/derive` owns every computed field. **The boundary is arithmetic over user-supplied inputs; no rules tables (D2).** This list is the contract and it is exhaustive — anything not named as computed is an input.
+`internal/dto/v1alpha/character/derive` owns every computed field. **The boundary is arithmetic over user-supplied inputs; no rules tables (D2).** This list is the contract and it is exhaustive — anything not named as computed is an input.
 
 **Computed:**
 
@@ -556,9 +558,9 @@ Both modes render from data that already exists; **this screen requires no schem
 
 **User-entered, never computed:** proficiency bonus, HP maximum, hit dice totals, carrying capacity and push/drag/lift, all AC breakdown terms, all speeds, spell slot maxima per level per pool, prepared maximum, cantrips known, resource maxima, attunement slot maximum, spellcasting ability per source.
 
-`Recompute(*Document) []Change` is pure and is called from the parent model's `Update` (§5.1) after every mutation, so derived-state bugs have exactly one home.
+`Recompute(doc Document) []Change` is pure — it reads the document and writes nothing — and `Apply(doc *Document, changes []Change)` is the only function that writes a derived field. Both are called from the parent model's `Update` (§5.1) after every mutation, so derived-state bugs have exactly one home. The split is not stylistic: a `Recompute` that corrected the document while producing a banner would have that correction on disk two seconds later, through the debounce (ARD 0005 §2).
 
-**Write-back policy (D7).** `Recompute` runs in memory everywhere; only three paths persist its output — the TUI on open (surfacing the diff as a banner, per the schema report's no-silent-mutation stance), the TUI on any subsequent edit, and explicit `dmosh character recompute`. `show` and `export` recompute for display only. `validate` compares stored against recomputed and reports drift with exit code 2 without touching the row. Read commands stay safe in pipelines and CI stays reproducible.
+**Write-back policy (D7).** `Recompute` runs on every path that displays or checks a sheet; `Apply` runs on three, and those are the only ones that persist a derived value — the TUI on any subsequent edit, explicit `dmosh character recompute`, and nothing else. **Opening a sheet computes but does not apply**: the diff becomes a banner, per the schema report's no-silent-mutation stance, and the stored document is unchanged until the user edits something. `show` and `export` recompute for display only. `validate` compares stored against recomputed and reports drift with exit code 2 without touching the row. Read commands stay safe in pipelines and CI stays reproducible.
 
 ### 8.2 Manual overrides
 
