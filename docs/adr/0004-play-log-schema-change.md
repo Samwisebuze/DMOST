@@ -4,7 +4,7 @@ title: play_log enters character.schema.json as Phase 0 pre-work
 updated: 2026-08-18
 status:
   - kind: proposed
-  - version: v0.1
+  - version: v0.2
 related:
   - docs/psd/0001_character-management-tui.md
   - docs/psd/0002_gm-managment-tui.md
@@ -24,6 +24,10 @@ nothing; it precedes everything, and PSD-0001 §11 schedules it as Phase 0 for t
 - **v0.1** — review pass across the surfaces v0 did not look at. Two additions: the HTTP patch path can
   rewrite the play log today and must not (§6), and the `schema_version` bump turns out to be advisory,
   which constrains every future change to this schema (§7).
+- **v0.2** — the Context's closed-root premise is withdrawn: it was never enforced, and ARD 0011 opens
+  the schema through `v1alpha` by decision. §3's claim that the `1.1.0` bump is additive becomes true
+  rather than contested, since ARD 0003 §5's tightening no longer rides along in the same bump, and
+  §7's additive-and-optional rule becomes the governing rule for the format.
 
 ## Context
 
@@ -34,12 +38,17 @@ the same XP twice. PSD-0002 §6.3 is explicit that there is no separate `applied
 character's own log is the only record, so the two cannot disagree. It names "the character log",
 assigns ownership of the change to PSD-0001, and never names the field.
 
-Three properties of the existing contract turn this from a field addition into a sequencing decision.
+Two properties of the existing contract turn this from a field addition into a sequencing decision.
+v0 listed three; the first is withdrawn.
 
-- **The root is closed.** `character.schema.json` line 8 is `"additionalProperties": false`. A
-  document carrying an unrecognized root field is *invalid*, so there is no version of this where the
-  tool tolerates `play_log` now and formalizes it later — and `import` would reject the very documents
-  the GM tool produces.
+- ~~**The root is closed.**~~ **Withdrawn in v0.2 — see ARD 0011.** v0 argued from
+  `character.schema.json` line 8, `"additionalProperties": false`, that a document carrying an
+  unrecognized root field is *invalid*, so the tool could not tolerate `play_log` now and formalize it
+  later. Two things undo that. It was never enforced: the only validator is `mapper.validateSheet`,
+  which decodes into the generated type without `DisallowUnknownFields`, and no JSON Schema validator
+  is a dependency of either module — unknown root fields are not merely tolerated today, they are
+  preserved. And ARD 0011 opens the root deliberately for the life of `v1alpha`. The sequencing
+  conclusion is unaffected, because it never rested on this bullet; the next one carries it alone.
 - **The Go types are a build artifact of the schema** (ARD 0003). A root field added after Phase 1
   means regenerating the tree, re-running every screen's model against it, and revisiting the
   round-trip corpus, for a field that could have been there from the first commit at no cost.
