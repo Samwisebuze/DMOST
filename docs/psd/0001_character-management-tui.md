@@ -1,10 +1,10 @@
 ---
 id: PSD-0001
 title: Character Management TUI
-updated: 2026-08-18
+updated: 2026-08-19
 status: 
     - kind: draft
-    - version: v0.4.7
+    - version: v0.4.8
 component: 
     - type: CLI
     - name: dmosh
@@ -15,6 +15,8 @@ audience:
   - contributors
 related:
   - docs/jsonschema/character/v1alpha/classes.schema.json
+  - docs/jsonschema/character/v1alpha/spellcasting.schema.json
+  - docs/jsonschema/character/v1alpha/vitals.schema.json
   - docs/psd/share/2024-character-schema-report.md
 ---
 
@@ -37,6 +39,8 @@ related:
 **v0.4.3** — the Phase 3 History screen is specified (D19), closing the last of §13's four open questions from v0.4. Three remain, all deferred by choice.
 
 **v0.4.4** — item instance loading and revisioning decided (D20), superseding D15's deferral.
+
+**v0.4.8** — **D9 amended (D22).** §6's struct-generation block is rewritten against the generator's actual behaviour: the hand-written exceptions attach through its own `goJSONSchema` schema keyword rather than a parallel `types_manual.go`, and only one of the two named constructs needs a hand-written type at all. No change to the document format.
 
 **v0.4.7** — adds §6.1, the `play_log` schema change, as **Phase 0 pre-work**. This is the first revision to modify `character.schema.json`; see the amended note below.
 
@@ -61,7 +65,7 @@ related:
 
 | # | Decision | Resolution | Sections |
 |---|---|---|---|
-| D9 | Struct codegen | **`omissis/go-jsonschema` plus hand-written exceptions** for the two patterns it can't express. | §6 |
+| D9 | Struct codegen | **`atombender/go-jsonschema` plus hand-written exceptions** for the two patterns it can't express. **Amended by D22** — the attachment mechanism is the generator's own `goJSONSchema` keyword, and only one of the two patterns needs a hand-written type. | §6 |
 | D10 | Default database location | **`--db` flag > `DMOSH_DB` env var > XDG data dir.** No current-directory search. | §4, §9 |
 | D11 | SQLite journal mode | **WAL, with `busy_timeout` and `foreign_keys` pragmas.** Network filesystems documented as unsupported. | §9.2 |
 | D12 | Terminal width | **80-column hard floor, named breakpoints at 80/120/160.** | §2, §7 |
@@ -95,9 +99,15 @@ related:
 |---|---|---|---|
 | D21 | Play log (schema prerequisite) | **Add `play_log` to `character.schema.json` as Phase 0 pre-work**, for PSD-0002's patch idempotency. Read/validated/round-tripped in v1; written by nothing. Exempt from `restore`. | §6.1, §10, §11 |
 
+### v0.4.8 decision
+
+| # | Decision | Resolution | Sections |
+|---|---|---|---|
+| D22 | Codegen extension mechanism | **Hand-written types attach via the generator's `goJSONSchema` schema keyword**, not a separate `types_manual.go`. `slotPool.slots` gets a substituted type; `conditionInstance` gets no hand-written type, because the compiled schema already enforces the rule the generator drops. Amends D9. | §6 |
+
 ### Corrections and inferences
 
-Six of these decisions had consequences that required changes beyond the sections they nominally touch. Recording them explicitly because each is a place where a reader of an earlier draft would otherwise be misled:
+Seven of these decisions had consequences that required changes beyond the sections they nominally touch. Recording them explicitly because each is a place where a reader of an earlier draft would otherwise be misled:
 
 1. **D13 narrows D1.** v0.3's §7.2 promised that species and background become catalog-backed pickers in Phase 2. Under D13 they do not — the catalog covers spells, equipment, and class-table reference text only. Species, background, origin feats, and class features remain free-text entry indefinitely. Whether they ever get catalog coverage is now an open question (§13.1).
 2. **D17 forces a command rename.** D8 introduced `dmosh character restore` for undeleting; D17's snapshot feature wants `restore --at <point>` for time-travel. These are different operations and shouldn't share a verb. Undelete is now `dmosh character undelete`; `restore` means snapshot restore.
@@ -105,6 +115,8 @@ Six of these decisions had consequences that required changes beyond the section
 4. **D18 carves out the lifecycle commands, and surfaces a latent gap.** The request was to make the target argument optional; exempting `delete`/`undelete`/`purge`/`restore` from that is an added safety judgement, not something asked for — flag it if you'd rather the variable applied uniformly. Separately, D18 forced a rule the spec had never stated: nothing previously said what `<name-or-id>` does when two live characters share a name. Resolving by name is now potentially invisible to the user, so ambiguity is an explicit error (§4).
 5. **D20's revisioning half was reversed, and that exposed an `export` gap.** v0.4.4 specified independent per-item revisions; v0.4.5 reverses that to a shared revision so restore is a clean transition. Two knock-ons were not asked about. First, snapshots must now capture the item set, which meant an `items` column on `character_revisions` and an aggregation done in SQL (`json_group_array`) so that capturing every item does not force the editor to abandon lazy loading — that combination is the subtlest thing in this decision and §9.4 shows the statement. Second, treating character-plus-items as one aggregate makes it indefensible for `export --format json` to emit only the character document: §9.3 claims export is the backup-and-handoff story, and an export that silently dropped every magic item would make that claim false. Export is now a `{character, items[]}` envelope. The `doc_revision` column added to `item_instances` in v0.4.4 has been removed again.
 6. **D21 carries two judgements PSD-0002 did not make.** That spec names "the character log" and its entry shape but not the field name or its interaction with anything here. I chose `play_log` over `character_log` for the opposition with `build_log` (§6.1), and — more consequentially — **exempted it from `restore`**. Without that exemption, rewinding to a revision predating a patch would erase the record of applying it and let the next `patch apply` re-award the same XP, which is precisely the failure PSD-0002's idempotency design exists to prevent. It is the only field with such an exemption, and it makes D20's "restore is a clean transition" true of sheet state rather than of literally every byte. Both are flaggable.
+
+7. **D22 removes work D9 asked for, and that is the point.** The request behind it was "how do the hand-written exceptions attach"; the answer changed what they are. Two things were not asked about. First, `conditionInstance` loses its hand-written type entirely — v0.4.7 already conceded the compiled schema was "the authority... a convenience check, not a second source of truth", which is an argument for not writing the type at all, and D22 follows it through. Anything kept there is now a method on the generated type (Pattern B) with a test pinning it to the schema. Second, and more consequentially, putting the seam in the schema means **`character.schema.json` and its siblings now carry a Go-specific keyword**. It is inert — JSON Schema ignores unknown keywords, and the files still compile and validate unchanged — but a language-neutral contract document is no longer strictly language-neutral. That is a real cost and the strongest argument for the approach D22 replaces; flag it if you'd rather pay the sync burden of a parallel file to keep the schemas clean. Both are flaggable.
 
 Through v0.4.6 the document format itself was unchanged across every revision. **v0.4.7 ends that**, additively and deliberately: `play_log` (§6.1) is the one field this spec adds, it is required by PSD-0002 rather than by anything here, and it is scheduled as Phase 0 precisely so the change happens once, before any code depends on the old shape. `character.schema.json` remains the source of truth for what a character *is*.
 
@@ -144,7 +156,7 @@ The tool is a single static Go binary. No network calls, no telemetry.
 | Markdown rendering | `charmbracelet/glamour` | Backstory/notes panes and `export --format markdown` |
 | Logging | `charmbracelet/log` | Structured, leveled logging to a file (never stdout while the TUI owns the screen) |
 | Schema validation | `santhosh-tekuri/jsonschema/v5` | Validates documents against the actual `character.schema.json` (§6) |
-| Struct generation | `omissis/go-jsonschema` | Build-time codegen of Go types from the schema (D9, §6) |
+| Struct generation | `atombender/go-jsonschema` | Build-time codegen of Go types from the schema (D9, D22, §6). Module path is `github.com/atombender/...`; `omissis/go-jsonschema` is the former name |
 | Persistence | `database/sql` + `modernc.org/sqlite` | Embedded store (§9). Pure-Go and cgo-free; `mattn/go-sqlite3` was rejected because its cgo dependency breaks the single-static-binary requirement |
 | Demo/docs tooling | `charmbracelet/vhs` | Not a runtime dependency; generates terminal-recording GIFs for the README |
 
@@ -244,12 +256,41 @@ Navigation is a stack, not a single enum, so `Esc` always returns to the prior s
 
 **Vendoring.** The schema is vendored at `internal/character/schema/character.schema.json`, kept byte-identical to the project doc by a `go generate` check, and compiled once at startup via `jsonschema.Compile`.
 
-**Struct generation (D9).** `omissis/go-jsonschema` generates the bulk of the type tree at build time via `go generate`, so a schema change that removes or renames a field becomes a compile error rather than silent data loss. Two schema constructs are beyond it and are hand-written in a clearly-marked `types_manual.go`, excluded from regeneration:
+**Struct generation (D9, amended by D22).** `atombender/go-jsonschema` generates the bulk of the type tree at build time via `go generate`, so a schema change that removes or renames a field becomes a compile error rather than silent data loss. The module path is `github.com/atombender/go-jsonschema`; earlier drafts of this spec called it `omissis/go-jsonschema` after the original author, and that name still resolves in prose but not in a `go.mod`.
 
-- **`slotPool.slots`** uses `patternProperties` (`^[1-9]$`) with `additionalProperties: false`. Hand-written as a `map[int]SlotCount` with custom `MarshalJSON`/`UnmarshalJSON` enforcing the 1–9 key range.
-- **`conditionInstance`** uses `allOf`/`if`/`then`/`else` to require `level` for Exhaustion and forbid it otherwise. Hand-written as a struct with a nullable `Level` plus a `Validate()` method carrying the conditional; the compiled JSON Schema remains the authority at load and save time, so this is a convenience check, not a second source of truth.
+**How the hand-written exceptions attach.** Not as a parallel `types_manual.go` kept in sync by convention — the generator has a hook for this. It reads a **`goJSONSchema`** keyword from any subschema (undocumented in its README; declared at `pkg/schemas/model.go:208`, consumed at four points in `pkg/generator/schema_generator.go`):
 
-A CI job asserts the generated output is current (regenerate, `git diff --exit-code`) so a schema edit can't land without regenerated types.
+| field | valid position | effect |
+|---|---|---|
+| `type` | type | emit this Go type name and generate nothing else for the construct |
+| `imports` | type or property | add imports to the generated file |
+| `nillable`, `pointer` | type | control nil-ability of the substituted type |
+| `identifier` | property | override the generated Go field name |
+| `extraTags` | property | add struct tags |
+
+So the seam lives **in the schema**, which is already the source of truth, rather than in a Go-side convention about which declarations are safe to hand-edit. The generator names your type; you write it in a normal file in the same package. Three patterns, in increasing order of cost:
+
+- **A — substitute a type.** For a construct the generator *cannot represent*. Put `"goJSONSchema": {"type": "SlotsByLevel"}` on the subschema and hand-write `SlotsByLevel` beside the generated file.
+- **B — a method on a generated type.** No extension and no substitute type: Go permits methods on generated types from another file in the same package. For rules where the generated *shape* is already correct.
+- **C — `identifier` / `extraTags`** on a property, for a field rename or an extra tag, with no hand-written code at all.
+
+The load-bearing property of A is that the generated `UnmarshalJSON` still runs its own required-field checks and then delegates via `json.Unmarshal(value, &plain)`, so `encoding/json` dispatches into the hand-written `UnmarshalJSON`. **The hand-written rule runs on the generated decode path**, with neither file importing the other, and substituting a type costs none of the generated validation.
+
+**The two constructs are not the same problem.** Drafts through v0.4.7 listed them together as "the two patterns it can't express" and sent both to one file. They need different treatment:
+
+- **`slotPool.slots` is a *typing* gap.** It uses `patternProperties` (`^[1-9]$`) with `additionalProperties: false`. Unaided the generator emits `type SlotPoolSlots map[string]interface{}` — every read needs a type assertion and every key is accepted, including `"0"`, `"10"`, and `"pact"`. The generated type cannot carry the data, so only Go can fix it. **Pattern A**, as a `map[int]SlotCount` whose `UnmarshalJSON` enforces the 1–9 key range: the map key is an `int`, so a caller cannot spell a key wrong, and the decoder refuses out-of-range and non-numeric keys.
+- **`conditionInstance` is a *validation* gap, and needs no hand-written type.** It uses `allOf`/`if`/`then`/`else` to require `level` for Exhaustion and forbid it otherwise. The generator drops the conditional *silently* — it emits a perfectly plausible `Level *int` and an `UnmarshalJSON` that checks `instance_id` and `name` and never mentions the rule — but the generated shape is correct. `santhosh-tekuri/jsonschema` compiled from the same file already enforces the rule exactly, and is the authority at load and save time. A hand-written type here would be a **restatement of a rule already enforced**, not a fix. If a `Validate()` method is wanted for callers holding an already-decoded value mid-edit, it is **Pattern B** — a method on the generated type, explicitly a convenience, and pinned against the compiled schema by a test that compares the two verdicts case by case so they cannot drift.
+
+This retires the name `types_manual.go`: grouping by "generator limitation" puts a real typing fix and a redundant validator in one file. One hand-written file per concept, named for the concept, beside the generated file.
+
+**Constraints on using the extension.** Each of these was established empirically against v0.24.1 and would otherwise cost an implementer an afternoon:
+
+- **It is ignored at `$ref` sites.** `generateTypeInline` guards the extension block with `t.Enum == nil && t.Ref == ""`. Put `goJSONSchema` on the `$defs` entry itself, never on the property that `$ref`s it.
+- **`--extra-imports` is unrelated to the `imports` field.** Despite its config comment, the flag only appends the YAML formatter (`pkg/generator/generate.go:57`). `imports` works without it.
+- **The keyword is inert to the validator.** JSON Schema ignores unknown keywords, so a schema file carrying `goJSONSchema` still compiles under draft 2020-12 and still validates documents unchanged. The real cost is that a Go-specific hint now lives in a language-neutral contract file — the one genuine argument for the parallel-types approach this amends.
+- **Regeneration is non-destructive.** `-o` fixes exactly one output path, so the `.gen.go` is the only file rewritten and the hand-written files beside it are untouched by design rather than by luck.
+
+**CI.** A job asserts the generated output is current (regenerate, `git diff --exit-code`) so a schema edit can't land without regenerated types. Note what that does *not* catch: neither construct above produced a warning or a non-zero exit when the generator gave up on it. `git diff --exit-code` catches **drift**; nothing catches **silent degradation**. Only a test that runs the same cases past both the hand-written Go and the compiled schema, and asserts the verdicts agree, closes that gap — and it is required for every construct handled by Pattern A or B.
 
 **Where validation runs (D6):** on `open`, on `import`, on wizard completion, on explicit save (`Ctrl+S`), on navigation away from the editor, and on `export`. It does **not** run on debounced autosave — mid-edit documents are routinely incomplete, and blocking autosave on them would lose work exactly when the user is typing most.
 
