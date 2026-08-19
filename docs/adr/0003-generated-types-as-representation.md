@@ -1,10 +1,10 @@
 ---
 id: ARD-0003
 title: Generated schema types are the in-memory representation
-updated: 2026-08-18
+updated: 2026-08-19
 status:
   - kind: proposed
-  - version: v0.2
+  - version: v0.3
 supersedes:
   - ARD-0001 decision 6 — section-scoped view models, not the generated CharacterSchema
 related:
@@ -31,6 +31,11 @@ mostly an argument with that record.
   `v1alpha`, so the silent-drop finding is answered by preserving unknown keys on save rather than by
   rejecting the documents that carry them. Also corrects §5's open/closed counts (31 declarations, not
   64 — the rest are discarded locals).
+- **v0.3** — §1's placement is corrected in both directions. v0 put derive under `internal/character`;
+  ARD 0005 v0.2 puts it on the schema's version line, beside the tree whose field names every formula in
+  it spells out. And the hand-written exceptions were never going to live there either — they *replace*
+  generated declarations, so they belong to the package that declares them. `internal/character` keeps
+  loading and validating.
 
 ## Context
 
@@ -79,19 +84,28 @@ are there and which validator is authoritative?**
 into it, mutates it, and re-encodes it. The compiled JSON Schema stays the authority on validity, and
 it runs before the decode, not after.**
 
-### 1. One tree, kept where it is generated
+### 1. One tree, and what sits on the version line with it
 
-`internal/dto/v1alpha/character` remains the only generated tree, and `internal/character` — the
-package PSD-0001 §5.3 names — holds the *behaviour* around it: loading, validating, the derive
-package (ARD 0005), and the hand-written exceptions below. It does not re-declare the types.
+`internal/dto/v1alpha/character` remains the only generated tree. What sits with it is decided by one
+question — does this code name `v1alpha` field names? — and the answer splits the packages:
+
+| | where | why |
+| --- | --- | --- |
+| the generated types | `internal/dto/v1alpha/character/character.gen.go` | the artifact `internal/generate.go` produces, per `[namespace]/[version]` |
+| the hand-written exceptions (§3) | `types_manual.go`, **same package** | they replace declarations in the generated file; a different package could not |
+| derive (ARD 0005) | `internal/dto/v1alpha/character/derive` | every formula spells out `v1alpha` field names, so a `v1beta` needs a second derive rather than an edited one |
+| loading, validating | `internal/character` — the package PSD-0001 §5.3 names | bytes and the compiled schema; no field-level knowledge |
+
+v0 put all three of the first rows' concerns under `internal/character`, which was wrong about the
+exceptions on a mechanical point and wrong about derive on a lifetime one — ARD 0005 §3 has the
+argument. It does not re-declare the types either way.
 
 Generating a second tree from the same schema files into a second package would double the
 regeneration surface and create two Go types for one contract, which is the drift D9 exists to
-prevent. That the surviving path reads `internal/dto/...` while an application package imports it is
-mildly odd, and it is the honest description of what the tree is: an artifact of the versioned
-schema, generated per `[namespace]/[version]` exactly as `internal/generate.go`'s package comment
-describes. A record proposing to move it should be a record about the `dto` boundary, not a side
-effect of this one.
+prevent. That an application package imports `internal/dto/...`, and that behaviour now lives under a
+`dto` path at all, is mildly odd — and it is the honest description of what these packages are:
+artifacts of one versioned schema, with the same lifetime. A record proposing to move them should be a
+record about the `dto` boundary, not a side effect of this one.
 
 ### 2. Validate first, then decode — PSD-0001 §5.3's order is backwards
 
@@ -202,7 +216,8 @@ which means **it fails today on this field**, and that is the point of writing i
   the same kind of change, wanting the same single format bump (ARD 0004). The schema tightening this
   record proposed alongside it is withdrawn by ARD 0011, which keeps the bump additive.
 - **The editor gains compile-time knowledge of the sheet, which is the entire point.** Nine section
-  screens (§7.2–§7.10) and a derive package (ARD 0005) reach named fields. Under ARD 0001 each of
+  screens (§7.2–§7.10) and a derive package (ARD 0005, living under this tree per §1) reach named
+  fields. Under ARD 0001 each of
   those was a hand-written struct plus a hand-written decode per section.
 - **`mapper.validateSheet` and the TUI now depend on the same type for different purposes.** The
   daemon uses it as a gate and discards the value; the TUI keeps the value. A change made for one
