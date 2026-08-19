@@ -4,7 +4,7 @@ title: Align the character stack with PSD-0001, breaking it where needed
 updated: 2026-08-18
 status:
   - kind: proposed
-  - version: v0.2
+  - version: v0.3
 narrows:
   - ARD-0001 decision 7 — merge patches remain the wire's write shape, not the TUI's
 adopts:
@@ -35,6 +35,9 @@ decision 7 rather than reversing it.
   keeping and `dmostd`'s current shape is not. This record now proposes the breaking changes that align
   `pkg/domain/character`, `pkg/app` and `internal/infra/sqlite` with PSD-0001. v0.1's projection
   finding survives inverted (§8); its two-tables guard is moot and dropped.
+- **v0.3** — §9 narrowed by ARD 0010, which freezes `dmostd`. The daemon stays wired to `inmem` but
+  stops obliging it to implement the whole widened port; `repotest`'s full contract runs against
+  `sqlite`. Also corrects the port's method count — seven rows, nine methods.
 
 ## Context
 
@@ -105,7 +108,7 @@ it belongs in `internal/test/repotest` where `inmem` and `sqlite` are both held 
 This is the sharpest cost in the record, and it is worth naming as a cost: an aggregate whose save
 semantics depend on whether part of it was loaded is a subtlety that will catch someone.
 
-### 2. The port grows from two methods to seven
+### 2. The port grows from two methods to nine (seven rows below)
 
 | method | why |
 | --- | --- |
@@ -224,16 +227,23 @@ The cost is exactly the one ARD 0001 named: `pkg/domain/character` now has a typ
 schema's `identity` or `progression` sections change. Two fields, one direction, one documented
 justification — bounded, but real, and this record is where anyone widening it should have to argue.
 
-### 9. `dmostd` stays on `inmem`, and the two roots keep both backends honest
+### 9. `dmostd` stays on `inmem` — and, under ARD 0010, stops paying for the port
 
 `dmosh` wires `sqlite`, `dmostd` keeps `inmem`. That is ARD 0001 decision 2's reasoning unchanged: two
 composition roots wiring different backends keep both implementations exercised above the level of the
 contract tests.
 
-`inmem` therefore implements all seven port methods, including soft delete, revisions, and the lazy item
-semantics of §1. That is real work, and it is the right work — CLAUDE.md calls `inmem` the reference
-implementation of the versioning rule, not a test double, and a port whose rules only one adapter obeys
-is a port with one implementation.
+**v0.3 narrows what follows from that.** v0.2 concluded that `inmem` therefore implements all of the
+port, soft delete, revisions and the lazy item semantics of §1 included, and called that the right work
+because CLAUDE.md treats `inmem` as the reference implementation of the versioning rule rather than a
+test double. ARD 0010 freezes `dmostd`, which removes the premise: the daemon reaches two of the nine
+methods this record adds, so the remaining seven were never going to be kept honest by a second
+composition root — only by `repotest`, which is the level the argument claimed to reach past.
+
+What survives is the narrower and truer half. `inmem` must satisfy the interface or nothing compiles,
+and it keeps full semantics for `Save` and `Find` — which is where the versioning rule lives, so its
+status as the reference implementation is intact. Beyond those it implements what something actually
+calls, and says so explicitly where it does not. ARD 0010 §2 has the rule and its cost.
 
 ## Consequences
 
