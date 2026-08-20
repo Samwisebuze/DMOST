@@ -6,3 +6,4 @@
 # Run `go generate ./...` before `go test ./...`.
 character/character.gen.go
 baseline/baseline.gen.go
+additionalprops/additionalprops.gen.go

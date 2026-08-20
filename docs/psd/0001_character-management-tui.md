@@ -41,7 +41,7 @@ related:
 
 **v0.4.4** — item instance loading and revisioning decided (D20), superseding D15's deferral.
 
-**v0.4.8** — **D9 amended (D22).** §6's struct-generation block is rewritten against the generator's actual behaviour: the hand-written exceptions attach through its own `goJSONSchema` schema keyword rather than a parallel `types_manual.go`, and only one of the two named constructs needs a hand-written type at all. No change to the document format.
+**v0.4.8** — **D9 amended (D22).** §6's struct-generation block is rewritten against the generator's actual behaviour: the hand-written exceptions attach through its own `goJSONSchema` schema keyword rather than a parallel `types_manual.go`, and only one of the two named constructs needs a hand-written type at all. Extended in place with a third silently-dropped construct — **`additionalProperties` is not enforced by the generated code**, which affects every schema we ship, since all of them close their objects with `false`. Folded into this revision rather than numbered separately: it is the same decision and the same review cycle, in the manner of v0.4.5. No change to the document format.
 
 **v0.4.7** — adds §6.1, the `play_log` schema change, as **Phase 0 pre-work**. This is the first revision to modify `character.schema.json`; see the amended note below.
 
@@ -104,7 +104,7 @@ related:
 
 | # | Decision | Resolution | Sections |
 |---|---|---|---|
-| D22 | Codegen extension mechanism | **Hand-written types attach via the generator's `goJSONSchema` schema keyword**, not a separate `types_manual.go`. `slotPool.slots` gets a substituted type; `conditionInstance` gets no hand-written type, because the compiled schema already enforces the rule the generator drops. Amends D9. | §6 |
+| D22 | Codegen extension mechanism | **Hand-written types attach via the generator's `goJSONSchema` schema keyword**, not a separate `types_manual.go`. `slotPool.slots` gets a substituted type; `conditionInstance` gets no hand-written type, because the compiled schema already enforces the rule the generator drops. Operating rule: **assume the generated type enforces only required fields, enums, and patterns** — `additionalProperties` is dropped too, on every schema we ship. Amends D9. | §6 |
 
 ### Corrections and inferences
 
@@ -284,7 +284,12 @@ The load-bearing property of A is that the generated `UnmarshalJSON` still runs 
 
 This retires the name `types_manual.go`: grouping by "generator limitation" puts a real typing fix and a redundant validator in one file. One hand-written file per concept, named for the concept, beside the generated file.
 
-**Evidence.** All of the above is demonstrated by a runnable spike at `docs/psd/share/gojsonschema-codegen-spike/` — 20 assertions across 7 claims, generating two packages from the same schemas so that the effect of the extension is a test result rather than an assertion. Its control is generated from `docs/jsonschema/character/v1alpha` directly, so it cannot drift from what the repo ships. If this section and that directory ever disagree, re-run its tests; they are the record.
+**`additionalProperties` is a third instance of the same class, and it is the one that touches every schema we ship.** Every file under `docs/jsonschema/character/v1alpha` that closes an object does so with `additionalProperties: false` — the character root, `abilities`, and `slotPool.slots`. **The generated code does not enforce any of them.** Unknown keys are dropped in silence, with no error, exactly the way `conditionInstance`'s conditional is dropped; only the compiled schema rejects them. Two consequences:
+
+- The generated type's value as a *validator* is narrower than it looks. It enforces required fields, enums, and patterns — not object closure. Any statement of what validation the decode path buys us must say so, or a reader will assume a closed object is checked when it is not.
+- **Do not reach for `additionalProperties: true` on an object that also declares `properties`.** It is the natural way to say "these known fields, plus anything else", and the generator handles it badly enough to lose data: it emits an `AdditionalProperties interface{}` field, generates no `UnmarshalJSON` at all for that type, and — the field having no `json:` tag — injects a bogus `"AdditionalProperties": null` key into everything it encodes. A typed `additionalProperties` decodes correctly but has no matching `MarshalJSON`, so encoding nests what decoding inlined and a second pass discards the extras entirely. Only a *free-form* object with no `properties` is handled correctly, becoming a plain `map[string]T`. Should a future schema need open objects, that is the shape to use — or Pattern A.
+
+**Evidence.** All of the above is demonstrated by a runnable spike at `docs/psd/share/gojsonschema-codegen-spike/` — 11 test functions across two packages, generating the character types twice from the same schemas so that the effect of the extension is a test result rather than an assertion, and pinning all six `additionalProperties` variants against both the generated Go and the compiled schema. Its control is generated from `docs/jsonschema/character/v1alpha` directly, so it cannot drift from what the repo ships. If this section and that directory ever disagree, re-run its tests; they are the record.
 
 **Constraints on using the extension.** Each of these was established empirically against v0.24.1 and would otherwise cost an implementer an afternoon:
 
@@ -293,7 +298,9 @@ This retires the name `types_manual.go`: grouping by "generator limitation" puts
 - **The keyword is inert to the validator.** JSON Schema ignores unknown keywords, so a schema file carrying `goJSONSchema` still compiles under draft 2020-12 and still validates documents unchanged. The real cost is that a Go-specific hint now lives in a language-neutral contract file — the one genuine argument for the parallel-types approach this amends.
 - **Regeneration is non-destructive.** `-o` fixes exactly one output path, so the `.gen.go` is the only file rewritten and the hand-written files beside it are untouched by design rather than by luck.
 
-**CI.** A job asserts the generated output is current (regenerate, `git diff --exit-code`) so a schema edit can't land without regenerated types. Note what that does *not* catch: neither construct above produced a warning or a non-zero exit when the generator gave up on it. `git diff --exit-code` catches **drift**; nothing catches **silent degradation**. Only a test that runs the same cases past both the hand-written Go and the compiled schema, and asserts the verdicts agree, closes that gap — and it is required for every construct handled by Pattern A or B.
+**CI.** A job asserts the generated output is current (regenerate, `git diff --exit-code`) so a schema edit can't land without regenerated types. Note what that does *not* catch: none of the three constructs above produced a warning or a non-zero exit when the generator gave up on it. `git diff --exit-code` catches **drift**; nothing catches **silent degradation**. Only a test that runs the same cases past both the hand-written Go and the compiled schema, and asserts the verdicts agree, closes that gap — and it is required for every construct handled by Pattern A or B.
+
+Three independent silent drops — `patternProperties`, `if`/`then`/`else`, and `additionalProperties` — is enough to stop treating each as a surprise. **Assume the generated type enforces only required fields, enums, and patterns, and treat anything else as unenforced until a test proves otherwise.** That is the operating rule; the spike is where new cases get checked before they are relied on.
 
 **Where validation runs (D6):** on `open`, on `import`, on wizard completion, on explicit save (`Ctrl+S`), on navigation away from the editor, and on `export`. It does **not** run on debounced autosave — mid-edit documents are routinely incomplete, and blocking autosave on them would lose work exactly when the user is typing most.
 

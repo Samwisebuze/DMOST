@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/spike/additional-props.schema.json",
+  "title": "additionalProperties variants",
+  "description": "A fixture, not a production schema. Six ways an object can declare additionalProperties, so the generator's handling of each is a test result rather than a claim. See PSD-0001 §6.",
+  "type": "object",
+  "properties": {
+    "props_true": { "$ref": "#/$defs/propsTrue" },
+    "props_false": { "$ref": "#/$defs/propsFalse" },
+    "props_typed": { "$ref": "#/$defs/propsTyped" },
+    "bare_true": { "$ref": "#/$defs/bareTrue" },
+    "bare_typed": { "$ref": "#/$defs/bareTyped" },
+    "props_omitted": { "$ref": "#/$defs/propsOmitted" }
+  },
+  "$defs": {
+    "propsTrue": {
+      "description": "Known fields plus arbitrary extras — the combination people usually reach for. Generates an unusable field; see the test.",
+      "type": "object",
+      "properties": { "known": { "type": "string" } },
+      "additionalProperties": true
+    },
+    "propsFalse": {
+      "description": "Closed object. What every schema under docs/jsonschema/character/v1alpha uses.",
+      "type": "object",
+      "properties": { "known": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "propsTyped": {
+      "description": "Known fields plus extras constrained to one type.",
+      "type": "object",
+      "properties": { "known": { "type": "string" } },
+      "additionalProperties": { "type": "integer" }
+    },
+    "bareTrue": {
+      "description": "Free-form object. The case the generator handles correctly.",
+      "type": "object",
+      "additionalProperties": true
+    },
+    "bareTyped": {
+      "description": "Free-form object with a typed value. Also handled correctly.",
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "propsOmitted": {
+      "description": "The control: additionalProperties absent, which JSON Schema treats as true.",
+      "type": "object",
+      "properties": { "known": { "type": "string" } }
+    }
+  }
+}

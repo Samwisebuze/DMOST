@@ -23,3 +23,9 @@ package spike
 // nothing else.
 //
 //go:generate sh -c "go tool go-jsonschema -p baseline --resolve-extension json -o baseline/baseline.gen.go ../../../jsonschema/character/v1alpha/*.schema.json"
+
+// The `additionalProperties` fixture. Separate from the character schemas
+// because none of them exercises anything but `additionalProperties: false`,
+// and the interesting behaviour is in the five variants they do not use.
+//
+//go:generate sh -c "go tool go-jsonschema -p additionalprops --resolve-extension json -o additionalprops/additionalprops.gen.go additionalprops/schema/additional-props.schema.json"

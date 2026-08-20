@@ -1,8 +1,10 @@
 # Spike: extending generated types from `go-jsonschema`
 
-Reference artifact for **PSD-0001 §6 / D22**. It answers one question that spec
-could not answer from the outside: *how* do the hand-written exceptions attach to
-a generated type tree, and which of §6's two named constructs actually needs one?
+Reference artifact for **PSD-0001 §6 / D22**. It answers what that spec could not
+answer from the outside: *how* do the hand-written exceptions attach to a
+generated type tree, which of §6's named constructs actually needs one, and —
+since the answer turned out to generalise — which schema keywords the generator
+drops on the floor without telling you.
 
 Everything asserted in PSD-0001 §6 about the generator's behaviour was
 established here, against `atombender/go-jsonschema` **v0.24.1**. If the spec and
@@ -13,7 +15,7 @@ this directory ever disagree, re-run the tests — they are the evidence.
 ```bash
 cd docs/psd/share/gojsonschema-codegen-spike
 go generate ./...   # required first — the .gen.go files are not committed
-go test ./...       # 20 assertions across 7 claims
+go test ./...       # 11 test functions, 29 cases with subtests
 ```
 
 This is a **third Go module**, deliberately outside the two that CLAUDE.md
@@ -91,6 +93,42 @@ That also argues against the name `types_manual.go`: one file for "things the
 generator couldn't do" mixes a real typing fix with a redundant validator. One
 hand-written file per concept, named for the concept, beside the generated file.
 
+## `additionalProperties` — a third instance of the same class
+
+`additionalprops/` pins what the generator does with each of the six ways an
+object can declare `additionalProperties`. The short answer to "does it support
+`additionalProperties: true`" is *partly*: booleans parse fine (`true` becomes
+`{}`, `false` becomes `{"not": {}}`, `pkg/schemas/model.go:253`), but what is
+generated turns on whether the object also declares `properties`.
+
+| schema | generated Go | decode | encode |
+| --- | --- | --- | --- |
+| no `properties` + `true` | `map[string]interface{}` | ok | ok |
+| no `properties` + `{type: string}` | `map[string]string` | ok | ok |
+| `properties` + `true` | `AdditionalProperties any` | **always nil** | injects `"AdditionalProperties":null` |
+| `properties` + `{type: int}` | `AdditionalProperties map[string]int` | ok | nests under a literal key |
+| `properties` + `false` | plain struct | extras dropped, **no error** | ok |
+| `properties` + absent | plain struct | extras dropped, **no error** | ok |
+
+Free-form objects are handled correctly. The two rows that carry extras alongside
+declared fields do **not** round-trip: `properties` + `true` gets no
+`UnmarshalJSON` generated at all, so the field is never populated and encoding
+injects a key named after the Go field; the typed variant decodes correctly but
+has no matching `MarshalJSON`, so encode nests what decode inlined, and feeding
+that back in discards the extras outright.
+
+The row that matters for DMOST is the fifth. Every schema under
+`docs/jsonschema/character/v1alpha` uses `additionalProperties: false`, and
+**the generated code does not enforce it** — extras are dropped in silence, with
+no error, exactly the way `conditionInstance`'s `if`/`then`/`else` is dropped.
+Only the compiled schema rejects them. That is the same silent-degradation
+finding as the two constructs above, in a third place, which is what makes it a
+class rather than a pair of accidents.
+
+These tests pin current behaviour rather than endorse it. If a later version of
+the generator fixes the broken rows, they fail — and that is the point: the table
+stops being true and PSD-0001 §6 needs revisiting.
+
 ## Gotchas found the hard way
 
 - **The extension is ignored at `$ref` sites.** `generateTypeInline` guards the
@@ -133,6 +171,9 @@ character/schema.go           the compiled schema: the authority both defer to
 character/spike_test.go       the 7 claims
 baseline/baseline.gen.go      generated (gitignored) straight from
                               docs/jsonschema/character/v1alpha — the control
+additionalprops/              the six additionalProperties variants; a
+                              self-contained fixture, not a production schema,
+                              because the character schemas only ever use `false`
 ```
 
 Two details about that layout are deliberate. The schemas sit *inside* the
