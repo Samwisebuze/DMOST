@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/srd-5.2.1/identity.schema.json",
+  "title": "Character Identity and Progression",
+  "description": "Who the character is at the table (free-text, rules-inert) and where they sit on the advancement track.",
+
+  "$defs": {
+    "identity": {
+      "type": "object",
+      "required": ["character_name"],
+      "properties": {
+        "character_name": { "type": "string" },
+        "player_name": { "type": ["string", "null"] },
+        "pronouns": { "type": ["string", "null"] },
+        "alignment": { "type": ["string", "null"] },
+        "age": { "type": ["string", "null"] },
+        "height": { "type": ["string", "null"] },
+        "weight": { "type": ["string", "null"] },
+        "faith": { "type": ["string", "null"] },
+        "appearance": { "type": ["string", "null"] },
+        "backstory": { "type": ["string", "null"] },
+        "roleplay_notes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": { "label": { "type": "string" }, "text": { "type": "string" } },
+            "required": ["label", "text"]
+          }
+        },
+        "portrait_url": { "type": ["string", "null"] }
+      }
+    },
+
+    "progression": {
+      "type": "object",
+      "required": ["total_character_level", "proficiency_bonus"],
+      "properties": {
+        "total_character_level": { "type": "integer", "minimum": 1, "maximum": 20 },
+        "experience_points": { "type": ["integer", "null"], "minimum": 0 },
+        "advancement_mode": { "enum": ["xp", "milestone"] },
+        "proficiency_bonus": { "type": "integer", "minimum": 2, "maximum": 6 },
+        "epic_boon_taken": { "type": "boolean" }
+      }
+    }
+  }
+}

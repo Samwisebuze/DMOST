@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/srd-5.2.1/common.schema.json",
+  "title": "Shared 5.5e Vocabulary",
+  "description": "Definitions referenced across more than one character sub-schema: the ruleset stamp, ability names, weapon mastery properties, and the provenance block every snapshotted entity carries.",
+
+  "$defs": {
+    "ruleset": {
+      "type": "object",
+      "required": ["system", "revision"],
+      "properties": {
+        "system": { "const": "dnd5e" },
+        "revision": { "enum": ["srd@5.1", "srd@5.2.1"] },
+        "srd_baseline": { "type": ["string", "null"] }
+      }
+    },
+
+    "abilityName": { "enum": ["strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma"] },
+
+    "masteryProperty": {
+      "enum": ["Cleave", "Graze", "Nick", "Push", "Sap", "Slow", "Topple", "Vex"]
+    },
+
+    "contentOrigin": {
+      "type": "string",
+      "enum": ["user_authored", "srd", "licensed", "imported_unknown"],
+      "description": "Provenance class of the content this entity was snapshotted from. Drives takedown response, attribution assembly, and export filtering. Distinct from is_homebrew, which only records whether the content came from a first-party catalog. user_authored = created by the user in this app, original to them. srd = from an SRD release under CC-BY. licensed = shipped by the operator under agreement with the rights holder (reserved; unused at v1). imported_unknown = entered or bulk-imported with unverified provenance (pasted from a file, typed out of a book, migrated from another tool)."
+    },
+
+    "sourceRef": {
+      "type": "object",
+      "required": ["content_origin", "attribution_required"],
+      "properties": {
+        "catalog_id": { "type": ["string", "null"] },
+        "book": { "type": ["string", "null"] },
+        "page": { "type": ["integer", "null"] },
+        "is_homebrew": {
+          "type": "boolean",
+          "description": "Retained for continuity and now derivable: true when content_origin is user_authored or imported_unknown. Pick one writer — computing it on write is safer than hand-setting both."
+        },
+        "srd_licensed": { "type": "boolean" },
+        "authored_by_user_id": { "type": ["string", "null"] },
+        "snapshot_version": { "type": ["string", "null"] },
+        "content_origin": { "$ref": "#/$defs/contentOrigin" },
+        "attribution_required": {
+          "type": "boolean",
+          "description": "Whether displaying, exporting, or sharing this entity obligates reproducing a license notice. True for anything under CC-BY. Lets export assemble notices mechanically instead of by recall. Records THAT a notice is owed, not WHICH one; licensed content will need an attribution_notice_id before it can ship."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "content_origin": { "const": "srd" } }, "required": ["content_origin"] },
+          "then": { "properties": { "attribution_required": { "const": true } } }
+        },
+        {
+          "if": { "properties": { "content_origin": { "const": "user_authored" } }, "required": ["content_origin"] },
+          "then": {
+            "properties": {
+              "catalog_id": { "type": "null" },
+              "attribution_required": { "const": false },
+              "srd_licensed": { "const": false }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "content_origin": { "const": "imported_unknown" } }, "required": ["content_origin"] },
+          "then": { "properties": { "catalog_id": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "content_origin": { "const": "licensed" } }, "required": ["content_origin"] },
+          "then": {
+            "required": ["catalog_id"],
+            "properties": { "catalog_id": { "type": "string" } }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/srd-5.2.1/vitals.schema.json",
+  "title": "Vitals",
+  "description": "Hit points, hit dice, death saves, active conditions, and standing defenses — the state that changes most often during play.",
+
+  "$defs": {
+    "vitals": {
+      "type": "object",
+      "required": ["hit_points"],
+      "properties": {
+        "hit_points": {
+          "type": "object",
+          "required": ["maximum", "current"],
+          "properties": {
+            "maximum": { "type": "integer", "minimum": 0 },
+            "current": { "type": "integer" },
+            "temporary": { "type": "integer", "minimum": 0 },
+            "maximum_modifier": { "type": "integer" },
+            "hp_roll_mode": { "enum": ["average", "rolled", "manual"] }
+          }
+        },
+        "hit_dice_pools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "die": { "enum": ["d6", "d8", "d10", "d12"] },
+              "class_ref": { "type": "string" },
+              "total": { "type": "integer" },
+              "remaining": { "type": "integer" }
+            }
+          }
+        },
+        "death_saves": {
+          "type": "object",
+          "properties": {
+            "successes": { "type": "integer", "minimum": 0, "maximum": 3 },
+            "failures": { "type": "integer", "minimum": 0, "maximum": 3 },
+            "stabilized": { "type": "boolean" }
+          }
+        },
+        "heroic_inspiration": {
+          "type": "boolean",
+          "description": "srd@5.2.1: boolean, not a counter. Gaining it while held loses it unless passed to a PC without it."
+        },
+        "conditions": { "type": "array", "items": { "$ref": "#/$defs/conditionInstance" } },
+        "defenses": {
+          "type": "object",
+          "properties": {
+            "resistances": { "type": "array", "items": { "type": "string" } },
+            "immunities": { "type": "array", "items": { "type": "string" } },
+            "vulnerabilities": { "type": "array", "items": { "type": "string" } },
+            "condition_immunities": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    },
+
+    "conditionInstance": {
+      "type": "object",
+      "required": ["instance_id", "name"],
+      "properties": {
+        "instance_id": { "type": "string" },
+        "name": {
+          "enum": ["Blinded", "Charmed", "Deafened", "Exhaustion", "Frightened", "Grappled", "Incapacitated", "Invisible", "Paralyzed", "Petrified", "Poisoned", "Prone", "Restrained", "Stunned", "Unconscious"]
+        },
+        "level": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 6,
+          "description": "Exhaustion only. Each level: -2 to d20 tests and -5 ft Speed; level 6 is death."
+        },
+        "source": { "type": ["string", "null"] },
+        "duration": { "type": ["object", "null"] },
+        "applied_at": { "type": ["string", "null"], "format": "date-time" },
+        "effect_snapshot": { "type": ["string", "null"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "name": { "const": "Exhaustion" } }, "required": ["name"] },
+          "then": { "required": ["level"], "properties": { "level": { "type": "integer" } } },
+          "else": { "properties": { "level": { "type": "null" } } }
+        }
+      ]
+    }
+  }
+}

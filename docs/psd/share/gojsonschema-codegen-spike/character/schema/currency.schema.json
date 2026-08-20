@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/srd-5.2.1/currency.schema.json",
+  "title": "Currency and Valuables",
+  "description": "Coins by denomination as the source of truth, with converted totals kept alongside as computed-on-write conveniences, plus gems, art objects, and the party treasury snapshot.",
+
+  "$defs": {
+    "currency": {
+      "type": "object",
+      "properties": {
+        "coins": {
+          "type": "object",
+          "description": "Denomination counts are the source of truth. Do NOT normalize to a single unit.",
+          "required": ["cp", "sp", "ep", "gp", "pp"],
+          "properties": {
+            "cp": { "type": "integer", "minimum": 0 },
+            "sp": { "type": "integer", "minimum": 0 },
+            "ep": { "type": "integer", "minimum": 0 },
+            "gp": { "type": "integer", "minimum": 0 },
+            "pp": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "coin_count_total": { "type": "integer" },
+        "coin_weight_lb": { "type": "number" },
+        "derived": {
+          "type": "object",
+          "description": "Denormalized convenience values, computed on write.",
+          "properties": {
+            "total_value_gp": { "type": "number" },
+            "total_value_cp": { "type": "integer" },
+            "conversion_table_used": { "type": "object" },
+            "electrum_enabled_at_table": { "type": "boolean" },
+            "computed_at": { "type": "string", "format": "date-time" }
+          }
+        },
+        "valuables": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["valuable_id", "name", "category"],
+            "properties": {
+              "valuable_id": { "type": "string" },
+              "name": { "type": "string" },
+              "category": { "enum": ["gemstone", "art_object", "trade_bar", "trade_good", "other"] },
+              "quantity": { "type": "integer" },
+              "estimated_value_gp": { "type": "number" },
+              "appraised": { "type": "boolean" },
+              "appraised_by": { "type": ["string", "null"] },
+              "weight_lb_total": { "type": "number" },
+              "inventory_entry_id": { "type": ["string", "null"] },
+              "is_sold": { "type": "boolean" },
+              "notes": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "starting_wealth": { "type": "object" },
+        "party_treasury_ref": {
+          "type": ["object", "null"],
+          "properties": {
+            "party_treasury_id": { "type": "string" },
+            "snapshot": { "type": "object" },
+            "is_authoritative": { "const": false }
+          }
+        },
+        "recurring_expenses": { "type": "array", "items": { "type": "object" } },
+        "ledger": { "type": "array", "items": { "type": "object" } }
+      }
+    }
+  }
+}

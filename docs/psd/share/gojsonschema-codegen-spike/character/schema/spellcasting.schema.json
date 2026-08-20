@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/srd-5.2.1/spellcasting.schema.json",
+  "title": "Spellcasting",
+  "description": "Multiple casting sources, the slot pools they contribute to, and one entry per spell with its snapshotted rules text. Under srd@5.2.1 every casting class prepares spells.",
+
+  "$defs": {
+    "spellcasting": {
+      "type": "object",
+      "properties": {
+        "sources": { "type": "array", "items": { "$ref": "#/$defs/spellcastingSource" } },
+        "slot_pools": { "type": "array", "items": { "$ref": "#/$defs/slotPool" } },
+        "pact_magic": { "type": ["object", "null"] },
+        "spellbook": {
+          "type": "object",
+          "properties": {
+            "has_spellbook": { "type": "boolean" },
+            "container_item_instance_id": { "type": ["string", "null"] },
+            "spells": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "spells": { "type": "array", "items": { "$ref": "#/$defs/spellEntry" } },
+        "concentration": {
+          "type": "object",
+          "properties": {
+            "is_concentrating": { "type": "boolean" },
+            "spell_entry_id": { "type": ["string", "null"] },
+            "started_at": { "type": ["string", "null"], "format": "date-time" },
+            "ends_at_estimate": { "type": ["string", "null"], "format": "date-time" },
+            "target_note": { "type": ["string", "null"] }
+          }
+        },
+        "pending_swaps": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+
+    "spellcastingSource": {
+      "type": "object",
+      "required": ["source_id", "source_kind", "source_name"],
+      "properties": {
+        "source_id": { "type": "string" },
+        "source_kind": { "enum": ["class", "subclass", "species_lineage", "feat", "item", "other"] },
+        "source_name": { "type": "string" },
+        "class_ref": { "type": ["string", "null"] },
+        "spellcasting_ability": { "$ref": "common.schema.json#/$defs/abilityName" },
+        "spellcasting_ability_was_player_chosen": { "type": "boolean" },
+        "spell_save_dc": { "type": "integer" },
+        "spell_attack_bonus": { "type": "integer" },
+        "caster_progression": { "enum": ["full", "half", "third", "pact", "none"] },
+        "spell_list_name": { "type": ["string", "null"] },
+        "preparation": {
+          "type": "object",
+          "description": "srd@5.2.1: ALL spellcasting classes prepare spells; the prepared maximum is a fixed number from the class table and the swap cadence varies per class.",
+          "properties": {
+            "uses_prepared_spells": { "type": "boolean" },
+            "prepared_maximum": { "type": "integer", "minimum": 0 },
+            "prepared_current_count": { "type": "integer", "minimum": 0 },
+            "prepares_from": { "enum": ["class_list", "spellbook", "granted", "custom"] },
+            "swap_rule": {
+              "type": ["object", "null"],
+              "properties": {
+                "cadence": { "enum": ["long_rest", "short_rest", "level_up", "never"] },
+                "spells_per_swap": { "type": ["integer", "null"] },
+                "unlimited": { "type": "boolean" }
+              }
+            },
+            "can_swap_cantrips": { "type": "boolean" },
+            "cantrips_known": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "ritual_casting": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "requires_prepared": { "type": "boolean" },
+            "notes": { "type": ["string", "null"] }
+          }
+        }
+      }
+    },
+
+    "slotPool": {
+      "type": "object",
+      "required": ["pool_id", "recharge_trigger", "slots"],
+      "properties": {
+        "pool_id": {
+          "goJSONSchema": { "identifier": "PoolID", "extraTags": { "db": "pool_id" } },
+          "type": "string"
+        },
+        "pool_name": { "type": "string" },
+        "recharge_trigger": { "enum": ["long_rest", "short_rest", "dawn", "custom"] },
+        "contributing_sources": { "type": "array", "items": { "type": "string" } },
+        "pact_slot_level": { "type": ["integer", "null"] },
+        "slots": {
+          "goJSONSchema": { "type": "SlotsByLevel" },
+          "type": "object",
+          "patternProperties": {
+            "^[1-9]$": {
+              "type": "object",
+              "properties": {
+                "maximum": { "type": "integer", "minimum": 0 },
+                "expended": { "type": "integer", "minimum": 0 }
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+
+    "spellEntry": {
+      "type": "object",
+      "required": ["entry_id", "spell_name", "level", "preparation"],
+      "properties": {
+        "entry_id": { "type": "string" },
+        "spell_name": { "type": "string" },
+        "source_id": { "type": "string" },
+        "preparation": {
+          "type": "object",
+          "properties": {
+            "origin": {
+              "enum": ["prepared_from_list", "always_prepared_feature", "granted_species", "granted_feat", "granted_item", "in_spellbook_unprepared", "innate"]
+            },
+            "origin_detail": { "type": ["string", "null"] },
+            "is_prepared": { "type": "boolean" },
+            "counts_against_prepared_maximum": { "type": "boolean" },
+            "may_also_cast_with_slots": { "type": "boolean" },
+            "free_casts": {
+              "type": ["object", "null"],
+              "properties": {
+                "maximum": { "type": "integer" },
+                "remaining": { "type": "integer" },
+                "recharge": { "enum": ["long_rest", "short_rest", "dawn"] },
+                "cast_at_level": { "type": "integer" }
+              }
+            }
+          }
+        },
+        "level": { "type": "integer", "minimum": 0, "maximum": 9 },
+        "school": { "enum": ["Abjuration", "Conjuration", "Divination", "Enchantment", "Evocation", "Illusion", "Necromancy", "Transmutation"] },
+        "casting_time": {
+          "type": "object",
+          "properties": {
+            "action_type": { "enum": ["action", "bonus_action", "reaction", "magic_action", "minutes", "hours"] },
+            "value": { "type": "integer" },
+            "unit": { "type": "string" },
+            "is_ritual": { "type": "boolean" },
+            "reaction_trigger": { "type": ["string", "null"] }
+          }
+        },
+        "range": { "type": "object" },
+        "area_of_effect": {
+          "type": ["object", "null"],
+          "properties": {
+            "shape": { "enum": ["cone", "cube", "cylinder", "emanation", "line", "sphere"] },
+            "size_ft": { "type": "number" }
+          }
+        },
+        "components": {
+          "type": "object",
+          "properties": {
+            "verbal": { "type": "boolean" },
+            "somatic": { "type": "boolean" },
+            "material": { "type": "boolean" },
+            "material_text": { "type": ["string", "null"] },
+            "material_cost_gp": { "type": "number" },
+            "material_consumed": { "type": "boolean" }
+          }
+        },
+        "duration": {
+          "type": "object",
+          "properties": {
+            "kind": { "enum": ["instantaneous", "timed", "until_dispelled", "special", "concentration"] },
+            "value": { "type": ["integer", "null"] },
+            "unit": { "type": ["string", "null"] },
+            "concentration": { "type": "boolean" }
+          }
+        },
+        "attack_or_save": { "type": "object" },
+        "damage": { "type": "array", "items": { "type": "object" } },
+        "healing": { "type": ["object", "null"] },
+        "upcast": { "type": "object" },
+        "description_snapshot": { "type": "string" },
+        "source_ref": { "$ref": "common.schema.json#/$defs/sourceRef" }
+      }
+    }
+  }
+}

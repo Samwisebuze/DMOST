@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/srd-5.2.1/character.schema.json",
+  "title": "5.5e Character Document",
+  "description": "Document aggregate root for a single player character under the 5.5e ruleset. Deliberately denormalized: raw inputs and computed totals are both stored, and embedded objects snapshot their rules text alongside a source_ref. Every section lives in a sibling schema file; this document is only the assembly.",
+  "type": "object",
+  "required": ["doc_type", "schema_version", "ruleset", "identity", "progression", "abilities", "species", "background", "classes", "vitals", "combat"],
+  "additionalProperties": false,
+
+  "properties": {
+    "_id": {
+      "type": "string",
+      "description": "Server-assigned document identity. Deliberately optional: a create request has no identity to state yet, and the aggregate's own CharacterID — not this field — is authoritative once the document is stored."
+    },
+    "doc_type": { "const": "character" },
+    "schema_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "ruleset": { "$ref": "common.schema.json#/$defs/ruleset" },
+    "campaign_id": { "type": ["string", "null"] },
+    "owner_user_id": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "doc_revision": { "type": "integer", "minimum": 0 },
+
+    "identity": { "$ref": "identity.schema.json#/$defs/identity" },
+    "progression": { "$ref": "identity.schema.json#/$defs/progression" },
+
+    "abilities": { "$ref": "abilities.schema.json#/$defs/abilities" },
+    "ability_allocation": { "$ref": "abilities.schema.json#/$defs/abilityAllocation" },
+
+    "species": { "$ref": "origin.schema.json#/$defs/species" },
+    "background": { "$ref": "origin.schema.json#/$defs/background" },
+
+    "classes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "classes.schema.json#/$defs/classEntry" }
+    },
+
+    "features": { "type": "array", "items": { "$ref": "features.schema.json#/$defs/feature" } },
+    "feats": { "type": "array", "items": { "$ref": "features.schema.json#/$defs/feat" } },
+    "proficiencies": { "$ref": "features.schema.json#/$defs/proficiencies" },
+
+    "vitals": { "$ref": "vitals.schema.json#/$defs/vitals" },
+
+    "combat": { "$ref": "combat.schema.json#/$defs/combat" },
+    "resources": { "type": "array", "items": { "$ref": "combat.schema.json#/$defs/resource" } },
+    "rest_state": { "$ref": "combat.schema.json#/$defs/restState" },
+
+    "spellcasting": { "$ref": "spellcasting.schema.json#/$defs/spellcasting" },
+
+    "inventory": { "$ref": "inventory.schema.json#/$defs/inventory" },
+    "currency": { "$ref": "currency.schema.json#/$defs/currency" },
+
+    "reputation": { "$ref": "reputation.schema.json#/$defs/reputation" },
+
+    "build_log": { "type": "array", "items": { "$ref": "build-log.schema.json#/$defs/buildLogEntry" } }
+  }
+}

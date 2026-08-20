@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/srd-5.2.1/classes.schema.json",
+  "title": "Class Levels",
+  "description": "One entry per class the character has levels in, carrying the subclass choice, save proficiencies, and the weapon mastery slots that class grants.",
+
+  "$defs": {
+    "classEntry": {
+      "type": "object",
+      "required": ["instance_id", "class_name", "class_level", "hit_die"],
+      "properties": {
+        "instance_id": { "type": "string" },
+        "class_name": { "type": "string" },
+        "class_level": { "type": "integer", "minimum": 1, "maximum": 20 },
+        "is_starting_class": { "type": "boolean" },
+        "hit_die": { "enum": ["d6", "d8", "d10", "d12"] },
+        "subclass": {
+          "type": ["object", "null"],
+          "description": "srd@5.2.1: every class chooses its subclass at level 3.",
+          "properties": {
+            "name": { "type": "string" },
+            "chosen_at_level": { "type": "integer" },
+            "source_ref": { "$ref": "common.schema.json#/$defs/sourceRef" }
+          }
+        },
+        "saving_throw_proficiencies": {
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/abilityName" }
+        },
+        "primary_abilities": {
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/abilityName" }
+        },
+        "fighting_style_feat": { "type": ["object", "null"] },
+        "weapon_mastery": {
+          "type": ["object", "null"],
+          "properties": {
+            "max_known": { "type": "integer", "minimum": 0 },
+            "swap_cadence": { "enum": ["long_rest", "level_up", "never"] },
+            "known": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["weapon_name", "mastery_property"],
+                "properties": {
+                  "weapon_name": { "type": "string" },
+                  "mastery_property": { "$ref": "common.schema.json#/$defs/masteryProperty" }
+                }
+              }
+            },
+            "last_swapped_at": { "type": ["string", "null"], "format": "date-time" }
+          }
+        },
+        "spellcasting_ref": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/srd-5.2.1/features.schema.json",
+  "title": "Features, Feats, and Proficiencies",
+  "description": "Everything the character has acquired that grants a rule: features from any origin, feats under the srd@5.2.1 taxonomy, and the proficiency lists they feed.",
+
+  "$defs": {
+    "feature": {
+      "type": "object",
+      "required": ["instance_id", "name", "origin"],
+      "properties": {
+        "instance_id": { "type": "string" },
+        "name": { "type": "string" },
+        "origin": {
+          "type": "object",
+          "properties": {
+            "kind": { "enum": ["class", "subclass", "species", "background", "feat", "item", "other"] },
+            "ref": { "type": ["string", "null"] },
+            "level_gained": { "type": ["integer", "null"] }
+          }
+        },
+        "text_snapshot": { "type": "string" },
+        "activation": {
+          "type": "object",
+          "properties": {
+            "type": { "enum": ["none", "action", "bonus_action", "reaction", "magic_action", "minutes", "hours", "passive"] },
+            "value": { "type": ["integer", "null"] }
+          }
+        },
+        "linked_resource_id": { "type": ["string", "null"] },
+        "source_ref": { "$ref": "common.schema.json#/$defs/sourceRef" }
+      }
+    },
+
+    "feat": {
+      "type": "object",
+      "required": ["instance_id", "name", "category"],
+      "properties": {
+        "instance_id": { "type": "string" },
+        "name": { "type": "string" },
+        "category": {
+          "enum": ["origin", "general", "fighting_style", "epic_boon"],
+          "description": "srd@5.2.1 feat taxonomy. Origin at L1 via background; General at ASI levels; Fighting Style requires the Fighting Style feature; Epic Boon at L19."
+        },
+        "repeatable": { "type": "boolean" },
+        "times_taken": { "type": "integer", "minimum": 1 },
+        "acquired_at_level": { "type": "integer", "minimum": 1 },
+        "acquired_via": { "enum": ["background", "asi_slot", "class_feature", "epic_boon_slot", "other"] },
+        "ability_increase": {
+          "type": ["object", "null"],
+          "properties": {
+            "ability": { "$ref": "common.schema.json#/$defs/abilityName" },
+            "amount": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "prerequisite_snapshot": { "type": ["string", "null"] },
+        "text_snapshot": { "type": "string" },
+        "linked_resource_id": { "type": ["string", "null"] },
+        "source_ref": { "$ref": "common.schema.json#/$defs/sourceRef" }
+      }
+    },
+
+    "proficiencies": {
+      "type": "object",
+      "properties": {
+        "armor": { "type": "array", "items": { "type": "string" } },
+        "weapons": { "type": "array", "items": { "type": "string" } },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "source": { "type": "string" },
+              "expertise": { "type": "boolean" }
+            }
+          }
+        },
+        "languages": { "type": "array", "items": { "type": "string" } },
+        "skills": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["skill", "ability", "proficient", "total_bonus"],
+            "properties": {
+              "skill": { "type": "string" },
+              "ability": { "$ref": "common.schema.json#/$defs/abilityName" },
+              "proficient": { "type": "boolean" },
+              "expertise": { "type": "boolean" },
+              "misc_bonus": { "type": "integer" },
+              "total_bonus": { "type": "integer" },
+              "sources": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    }
+  }
+}

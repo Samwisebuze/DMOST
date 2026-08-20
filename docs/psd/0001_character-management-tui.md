@@ -18,6 +18,7 @@ related:
   - docs/jsonschema/character/v1alpha/spellcasting.schema.json
   - docs/jsonschema/character/v1alpha/vitals.schema.json
   - docs/psd/share/2024-character-schema-report.md
+  - docs/psd/share/gojsonschema-codegen-spike/README.md
 ---
 
 # Product Specification: Character Management TUI
@@ -282,6 +283,8 @@ The load-bearing property of A is that the generated `UnmarshalJSON` still runs 
 - **`conditionInstance` is a *validation* gap, and needs no hand-written type.** It uses `allOf`/`if`/`then`/`else` to require `level` for Exhaustion and forbid it otherwise. The generator drops the conditional *silently* — it emits a perfectly plausible `Level *int` and an `UnmarshalJSON` that checks `instance_id` and `name` and never mentions the rule — but the generated shape is correct. `santhosh-tekuri/jsonschema` compiled from the same file already enforces the rule exactly, and is the authority at load and save time. A hand-written type here would be a **restatement of a rule already enforced**, not a fix. If a `Validate()` method is wanted for callers holding an already-decoded value mid-edit, it is **Pattern B** — a method on the generated type, explicitly a convenience, and pinned against the compiled schema by a test that compares the two verdicts case by case so they cannot drift.
 
 This retires the name `types_manual.go`: grouping by "generator limitation" puts a real typing fix and a redundant validator in one file. One hand-written file per concept, named for the concept, beside the generated file.
+
+**Evidence.** All of the above is demonstrated by a runnable spike at `docs/psd/share/gojsonschema-codegen-spike/` — 20 assertions across 7 claims, generating two packages from the same schemas so that the effect of the extension is a test result rather than an assertion. Its control is generated from `docs/jsonschema/character/v1alpha` directly, so it cannot drift from what the repo ships. If this section and that directory ever disagree, re-run its tests; they are the record.
 
 **Constraints on using the extension.** Each of these was established empirically against v0.24.1 and would otherwise cost an implementer an afternoon:
 
