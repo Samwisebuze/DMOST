@@ -5,7 +5,7 @@
   "description": "Document aggregate root for a single player character under the 5.5e ruleset. Deliberately denormalized: raw inputs and computed totals are both stored, and embedded objects snapshot their rules text alongside a source_ref. Every section lives in a sibling schema file; this document is only the assembly.",
   "type": "object",
   "required": ["doc_type", "schema_version", "ruleset", "identity", "progression", "abilities", "species", "background", "classes", "vitals", "combat"],
-  "additionalProperties": false,
+  "additionalProperties": true,
 
   "properties": {
     "_id": {

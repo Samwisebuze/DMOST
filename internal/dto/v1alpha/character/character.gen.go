@@ -2,11 +2,16 @@
 
 package character
 
-import "encoding/json"
-import "fmt"
-import "reflect"
-import "regexp"
-import "time"
+import (
+	"encoding/json"
+	"fmt"
+	"reflect"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/go-viper/mapstructure/v2"
+)
 
 type Abilities struct {
 	// Charisma corresponds to the JSON schema field "charisma".
@@ -730,6 +735,8 @@ type CharacterSchema struct {
 
 	// Vitals corresponds to the JSON schema field "vitals".
 	Vitals Vitals `json:"vitals" yaml:"vitals" mapstructure:"vitals"`
+
+	AdditionalProperties interface{} `mapstructure:",remain"`
 }
 
 type CharacterSchemaCampaignId *string
@@ -786,6 +793,14 @@ func (j *CharacterSchema) UnmarshalJSON(value []byte) error {
 	}
 	if matched, _ := regexp.MatchString(`^\d+\.\d+\.\d+$`, string(plain.SchemaVersion)); !matched {
 		return fmt.Errorf("field %s pattern match: must match %s", "SchemaVersion", `^\d+\.\d+\.\d+$`)
+	}
+	st := reflect.TypeOf(Plain{})
+	for i := range st.NumField() {
+		delete(raw, st.Field(i).Name)
+		delete(raw, strings.Split(st.Field(i).Tag.Get("json"), ",")[0])
+	}
+	if err := mapstructure.Decode(raw, &plain.AdditionalProperties); err != nil {
+		return err
 	}
 	*j = CharacterSchema(plain)
 	return nil
