@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/spike/additional-props.schema.json",
+  "title": "additionalProperties variants",
+  "description": "A fixture, not a production schema. Six ways an object can declare additionalProperties, so the generator's handling of each is a test result rather than a claim. See PSD-0001 §6.",
+  "type": "object",
+  "properties": {
+    "props_true": { "$ref": "#/$defs/propsTrue" },
+    "props_false": { "$ref": "#/$defs/propsFalse" },
+    "props_typed": { "$ref": "#/$defs/propsTyped" },
+    "bare_true": { "$ref": "#/$defs/bareTrue" },
+    "bare_typed": { "$ref": "#/$defs/bareTyped" },
+    "props_omitted": { "$ref": "#/$defs/propsOmitted" },
+    "props_empty_schema": { "$ref": "#/$defs/propsEmptySchema" },
+
+    "open_via_methods": { "$ref": "#/$defs/openViaMethods" },
+    "open_via_extension": { "$ref": "#/$defs/openViaExtension" },
+    "typed_via_marshal": { "$ref": "#/$defs/typedViaMarshal" }
+  },
+  "$defs": {
+    "propsTrue": {
+      "description": "Known fields plus arbitrary extras — the combination people usually reach for. Generates an unusable field; see the test.",
+      "type": "object",
+      "properties": { "known": { "type": "string" } },
+      "additionalProperties": true
+    },
+    "propsFalse": {
+      "description": "Closed object. What every schema under docs/jsonschema/character/v1alpha uses.",
+      "type": "object",
+      "properties": { "known": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "propsTyped": {
+      "description": "Known fields plus extras constrained to one type.",
+      "type": "object",
+      "properties": { "known": { "type": "string" } },
+      "additionalProperties": { "type": "integer" }
+    },
+    "bareTrue": {
+      "description": "Free-form object. The case the generator handles correctly.",
+      "type": "object",
+      "additionalProperties": true
+    },
+    "bareTyped": {
+      "description": "Free-form object with a typed value. Also handled correctly.",
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "propsOmitted": {
+      "description": "The control: additionalProperties absent, which JSON Schema treats as true.",
+      "type": "object",
+      "properties": { "known": { "type": "string" } }
+    },
+
+    "propsEmptySchema": {
+      "description": "The spelling that looks like a workaround and is not: `{}` is the same schema as `true` in JSON Schema, and the generator treats it identically.",
+      "type": "object",
+      "properties": { "known": { "type": "string" } },
+      "additionalProperties": {}
+    },
+
+    "openViaMethods": {
+      "description": "Workaround 1. Structurally identical to propsTrue; the difference is entirely in Go, where workarounds.go supplies UnmarshalJSON and MarshalJSON on the generated type. No schema change is needed to make properties+true work.",
+      "type": "object",
+      "properties": { "known": { "type": "string" } },
+      "additionalProperties": true
+    },
+    "openViaExtension": {
+      "description": "Workaround 2. The seam goes in the schema instead: goJSONSchema substitutes a map-shaped hand-written type. Note this is a $defs entry, so the generator emits `type OpenViaExtension OpenBag` — a defined type, which does NOT inherit methods. A map shape survives that; a struct with custom marshalling would not.",
+      "goJSONSchema": { "type": "OpenBag" },
+      "type": "object",
+      "properties": { "known": { "type": "string" } },
+      "additionalProperties": true
+    },
+    "typedViaMarshal": {
+      "description": "Workaround 3. Structurally identical to propsTyped. Here the generator DOES emit UnmarshalJSON and decoding is already correct, so workarounds.go supplies MarshalJSON alone — which is never generated, so there is no collision.",
+      "type": "object",
+      "properties": { "known": { "type": "string" } },
+      "additionalProperties": { "type": "integer" }
+    }
+  }
+}
