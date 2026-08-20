@@ -15,7 +15,7 @@ this directory ever disagree, re-run the tests — they are the evidence.
 ```bash
 cd docs/psd/share/gojsonschema-codegen-spike
 go generate ./...   # required first — the .gen.go files are not committed
-go test ./...       # 11 test functions, 29 cases with subtests
+go test ./...       # 15 test functions, 33 cases with subtests
 ```
 
 This is a **third Go module**, deliberately outside the two that CLAUDE.md
@@ -117,6 +117,36 @@ injects a key named after the Go field; the typed variant decodes correctly but
 has no matching `MarshalJSON`, so encode nests what decode inlined, and feeding
 that back in discards the extras outright.
 
+### …and how to work around it
+
+Neither broken row is a dead end. `workarounds.go` and `workarounds_test.go`
+carry three verified routes, in increasing order of what they cost you:
+
+| | route | schema change | declared fields |
+| --- | --- | --- | --- |
+| **W1** | hand-write `UnmarshalJSON` + `MarshalJSON` on the generated type | none | stay typed |
+| **W2** | `goJSONSchema` substituting a map-shaped type | one keyword | need a helper |
+| **W3** | *typed* extras: `MarshalJSON` alone | none | stay typed |
+
+**W1 is the default.** It works *precisely because* of the defect: the generator
+emits neither method for `properties` + `true`, so both slots are free and a
+second file in the same package can fill them. **W3** is the same trick at half
+size — for a typed `additionalProperties` the generated decoder is already
+correct, so only the encoder is missing, and `MarshalJSON` is never generated.
+
+**W2 carries the subtler lesson.** Because the extension is ignored at `$ref`
+sites, a shared object must carry it on the `$defs` entry — and there the
+generator emits `type OpenViaExtension OpenBag`, a **defined type**, which does
+*not* inherit methods. A struct substitute with custom marshalling would arrive
+at the use site without it, silently. A map shape survives, because
+`encoding/json` handles maps natively and there are no methods to lose.
+`TestW2MapShapedSubstituteAtDefsEntry` exercises it through the parent struct,
+which is where a dropped method would actually show up.
+
+What does **not** work is changing the spelling: `additionalProperties: {}` is
+the same schema as `true` and generates the identical dead field
+(`TestEmptySchemaIsNotAWorkaround`).
+
 The row that matters for DMOST is the fifth. Every schema under
 `docs/jsonschema/character/v1alpha` uses `additionalProperties: false`, and
 **the generated code does not enforce it** — extras are dropped in silence, with
@@ -171,9 +201,12 @@ character/schema.go           the compiled schema: the authority both defer to
 character/spike_test.go       the 7 claims
 baseline/baseline.gen.go      generated (gitignored) straight from
                               docs/jsonschema/character/v1alpha — the control
-additionalprops/              the six additionalProperties variants; a
+additionalprops/              the additionalProperties variants; a
                               self-contained fixture, not a production schema,
                               because the character schemas only ever use `false`
+  additionalprops_test.go     the diagnosis: what the generator does with each
+  workarounds.go              the remedy: W1, W2, W3 hand-written
+  workarounds_test.go         proof each one round-trips, twice
 ```
 
 Two details about that layout are deliberate. The schemas sit *inside* the
