@@ -10,7 +10,7 @@ import (
 )
 
 // characterSheet is the smallest document that satisfies every required field
-// of docs/jsonschema/character/v1alpha — the schema has a dozen of them nested
+// of pkg/domain/character/schema/v1alpha — the schema has a dozen of them nested
 // several levels deep, so building one inline in each test is not worth it.
 //
 // Embedded rather than read at runtime: go:embed resolves relative to this

@@ -1,13 +1,12 @@
 package character
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"slices"
 	"time"
 
+	"github.com/samwisebuze/dmost/pkg/domain/character/schema"
 	"github.com/samwisebuze/dmost/pkg/domain/common"
 )
 
@@ -38,18 +37,19 @@ type Character struct {
 
 // NewCharacter builds a Character around an encoded character sheet.
 //
-// The sheet stays opaque here on purpose. What counts as a *well-formed* sheet
-// is a wire-contract rule — the shape lives in docs/jsonschema and is enforced
-// against the generated v1alpha types in
-// [github.com/samwisebuze/dmost/internal/dto/v1alpha/mapper], which is where
-// this constructor is called from. The domain's own rule is the narrower one
-// that survives a change of schema version: a Character has a sheet, and that
-// sheet is a JSON object.
+// The sheet is validated against the whole v1alpha character schema, embedded
+// in [github.com/samwisebuze/dmost/pkg/domain/character/schema/v1alpha]: a
+// Character does not exist unless its sheet carries every required section, at
+// every depth. That schema is one document assembled from a dozen files by
+// $ref, and it is the same set the v1alpha wire types are generated from, so a
+// sheet the DTOs can encode and one the domain will accept stay the same thing.
 //
-// Returns an error wrapping [common.ErrInvalid] if data is empty, is not valid
-// JSON, or is valid JSON that is not an object.
+// Returns an error wrapping [common.ErrInvalid] if data is empty, does not
+// parse, parses as something other than an object, or parses into an object the
+// schema rejects — the last case naming the offending locations. "Parses" is
+// stricter here than [encoding/json]; see sheetSchema.
 func NewCharacter(data json.RawMessage) (Character, error) {
-	if err := validateSheet(data); err != nil {
+	if err := schema.Validate(data); err != nil {
 		return Character{}, err
 	}
 
@@ -70,27 +70,11 @@ func NewCharacter(data json.RawMessage) (Character, error) {
 // Identity, CreatedAt, and Version are untouched — this is a mutation of the
 // aggregate the caller loaded, so it rides through a load-modify-save cycle.
 func (c *Character) ReplaceSheet(data json.RawMessage) error {
-	if err := validateSheet(data); err != nil {
+	if err := schema.Validate(data); err != nil {
 		return err
 	}
 
 	c.data = slices.Clone(data)
-	return nil
-}
-
-func validateSheet(data json.RawMessage) error {
-	trimmed := bytes.TrimSpace(data)
-	if len(trimmed) == 0 {
-		return fmt.Errorf("%w: character sheet required", common.ErrInvalid)
-	}
-	if !json.Valid(trimmed) {
-		return fmt.Errorf("%w: character sheet must be valid JSON", common.ErrInvalid)
-	}
-	// A bare `4` or `"x"` is valid JSON and not a character sheet. Checking the
-	// first byte is enough once json.Valid has passed.
-	if trimmed[0] != '{' {
-		return fmt.Errorf("%w: character sheet must be a JSON object", common.ErrInvalid)
-	}
 	return nil
 }
 
@@ -105,8 +89,5 @@ func rehydrateCharacter(id CharacterID, data json.RawMessage, createdAt time.Tim
 
 // Data returns the character sheet as encoded JSON.
 //
-// The copy is deliberate: [json.RawMessage] is a slice, so handing back the
-// field itself would let a caller edit a Character in place and sidestep the
-// read-only rule the other getters keep. It is also what makes a repository's
-// stored copy safe — see [github.com/samwisebuze/dmost/internal/infra/inmem].
+// The copy is deliberate: [json.RawMessage] is a slice.
 func (c Character) Data() json.RawMessage { return slices.Clone(c.data) }

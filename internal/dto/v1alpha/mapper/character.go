@@ -97,7 +97,7 @@ func ApplyCharacterPatchRequest(c *character.Character, req dto.PatchCharacterRe
 // They are the document's own bookkeeping — who it is, which contract it
 // speaks, and when it changed — and the aggregate is authoritative over the
 // ones that overlap it (see the "_id" description in
-// docs/jsonschema/character/v1alpha/character.schema.json). Letting a patch
+// pkg/domain/character/schema/v1alpha/character.schema.json). Letting a patch
 // reach them would let a client rewrite its own history in place.
 //
 // "campaign_id" is deliberately absent: it is the client's to set, and to

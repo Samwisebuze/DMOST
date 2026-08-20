@@ -5,7 +5,7 @@ import "encoding/json"
 const ContentTypeCharacterJSON string = "application/vnd.dmost.character.v1alpha+json"
 
 // The character sheet itself is not declared here: it is generated from
-// docs/jsonschema/character/v1alpha into the character subpackage, and these
+// pkg/domain/character/schema/v1alpha into the character subpackage, and these
 // requests carry it as raw bytes rather than as that generated struct.
 //
 // Two reasons. The domain stores the sheet as encoded JSON, so decoding it

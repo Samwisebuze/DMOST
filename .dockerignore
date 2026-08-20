@@ -3,6 +3,8 @@
 # replace, so both have to be present.
 #
 # Do NOT exclude *_test.go: the `test` stage in docker/Dockerfile runs them.
+# Do NOT exclude *.schema.json either: pkg/domain/character/schema/v1alpha is
+# embedded with go:embed, and a missing file there fails the build, not a test.
 
 # VCS. Excluding this also avoids the "detected dubious ownership" failure that
 # Go's VCS stamping hits inside containers (the build also passes -buildvcs=false).

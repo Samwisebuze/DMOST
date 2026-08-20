@@ -19,7 +19,7 @@
 # base — toolchain + downloaded module dependencies, shared by every stage.
 # ---------------------------------------------------------------------------
 # Keep this tag in step with the `go` directive in both go.mod files.
-FROM golang:1.26.3-alpine AS base
+FROM golang:1.26.7-alpine AS base
 
 # CGO_ENABLED=0 is what makes the binary static enough for a scratch image;
 # the default (CGO_ENABLED=1) produces a dynamically-linked ELF that cannot run
