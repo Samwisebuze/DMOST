@@ -163,3 +163,56 @@ func (r *CharacterRepository) Find(ctx context.Context, id domain.CharacterID) (
 		common.RehydrateVersion(uint64(version)),
 	), nil
 }
+
+const listCharacter = `SELECT id, data, created_at, version FROM characters ORDER BY id ASC`
+
+// List implements [character.CharacterRepository].
+func (r *CharacterRepository) List(ctx context.Context) ([]domain.Character, error) {
+	pool, err := r.db.handle()
+	if err != nil {
+		return nil, err
+	}
+
+	var entities []domain.Character
+
+	if err := retry(ctx, func() error {
+		rows, err := pool.QueryContext(ctx, listCharacter)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var (
+				id string
+				// data is scanned as a string rather than a []byte so the conversion
+				// below allocates: the sheet handed to Rehydrate cannot alias anything
+				// the driver still owns. Never [database/sql.RawBytes], which is only
+				// valid until the next row.
+				data      string
+				createdAt string
+				version   int64
+			)
+			if err := rows.Scan(&id, &data, &createdAt, &version); err != nil {
+				return err
+			}
+
+			created, err := time.Parse(timeLayout, createdAt)
+			if err != nil {
+				return fmt.Errorf("sqlite: character: parse created_at: %w", err)
+			}
+
+			entities = append(entities,
+				characterFactory.Rehydrate(domain.CharacterID(id), json.RawMessage(data), created, common.RehydrateVersion(uint64(version))))
+
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("sqlite: list character: %w", err)
+	}
+
+	return entities, nil
+}

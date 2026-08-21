@@ -20,6 +20,7 @@ package repotest
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -42,6 +43,7 @@ func RunCharacterRepositoryContract(t *testing.T, newRepo func(t *testing.T) cha
 	t.Run("Save", func(t *testing.T) { runCharacterSave(t, newRepo) })
 	t.Run("Find", func(t *testing.T) { runCharacterFind(t, newRepo) })
 	t.Run("ConcurrentAccess", func(t *testing.T) { runCharacterConcurrentAccess(t, newRepo) })
+	t.Run("List", func(t *testing.T) { runCharacterList(t, newRepo) })
 }
 
 func runCharacterSave(t *testing.T, newRepo func(t *testing.T) character.CharacterRepository) {
@@ -203,6 +205,37 @@ func runCharacterFind(t *testing.T, newRepo func(t *testing.T) character.Charact
 
 		_, err := sut.Find(context.Background(), character.NewCharacterID())
 		require.ErrorIs(t, err, common.ErrNotFound)
+	})
+}
+
+func runCharacterList(t *testing.T, newRepo func(t *testing.T) character.CharacterRepository) {
+	t.Helper()
+
+	t.Run("lists characters", func(t *testing.T) {
+		sut := newRepo(t)
+		for i := range 3 {
+			chr := test.MustRehydrateCharacter(t, character.CharacterID(strconv.FormatInt(int64(i), 10)), `{"level": "1"}`)
+			require.NoError(t, sut.Save(context.Background(), chr))
+		}
+
+		loaded, err := sut.List(context.Background())
+		require.NoError(t, err)
+		assert.Len(t, loaded, 3)
+	})
+
+	t.Run("lists characters in ascending order by creation", func(t *testing.T) {
+		sut := newRepo(t)
+		for range 3 {
+			chr := test.MustRehydrateCharacter(t, character.NewCharacterID(), `{"level": "1"}`)
+			require.NoError(t, sut.Save(context.Background(), chr))
+		}
+
+		loaded, err := sut.List(context.Background())
+		require.NoError(t, err)
+		var cursor character.CharacterID = loaded[0].ID()
+		for _, el := range loaded[1:] {
+			assert.Equal(t, -1, cursor.Compare(el.ID())) // ASC
+		}
 	})
 }
 

@@ -28,6 +28,8 @@ type CharacterRepository interface {
 	//
 	// Returns [common.ErrNotFound] if no such entity exists.
 	Find(context.Context, CharacterID) (Character, error)
+
+	List(context.Context) ([]Character, error)
 }
 
 type Character struct {
