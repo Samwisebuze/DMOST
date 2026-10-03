@@ -148,9 +148,6 @@ func TestTypedAdditionalPropertiesDoesNotRoundTrip(t *testing.T) {
 // docs/jsonschema/character/v1alpha declares `additionalProperties: false`, and
 // the generated code does not enforce it — extras are dropped in silence, with
 // no error, exactly the way conditionInstance's if/then/else is dropped.
-//
-// The compiled schema is the only thing that enforces it. This is the same
-// finding as PSD-0001 §6's "silent degradation" note, in a third place.
 func TestFalseIsNotEnforcedByGeneratedCode(t *testing.T) {
 	t.Parallel()
 

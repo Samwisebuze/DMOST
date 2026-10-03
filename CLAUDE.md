@@ -8,27 +8,30 @@ DMOST ("Dungeon Master's Open Source Toolkit") — a personal project exploring 
 
 ## Build & test
 
-There are **two modules and no `go.work`** — each resolves on its own:
+There are **three modules and no `go.work`** — each resolves on its own:
 
 - `github.com/samwisebuze/dmost` at the repo root — everything under `pkg/`.
-- `github.com/samwisebuze/dmost/cmd/dmostd`, a **nested** module for the daemon. It `require`s the root module and pins it with `replace github.com/samwisebuze/dmost => ../..`.
+- `github.com/samwisebuze/dmost/cmd/dmostd`, a **nested** module for the daemon.
+- `github.com/samwisebuze/dmost/cmd/dmosh`, a **nested** module for the shell (CLI + TUI).
 
-**No pattern rooted at the repo covers both.** `cmd/dmostd` is a separate module, so from the root neither `./...` nor `github.com/samwisebuze/dmost/...` matches it — they skip the daemon and its e2e tests and still exit 0. Anything that must cover everything runs twice:
+Each nested module `require`s the root module and pins it with `replace github.com/samwisebuze/dmost => ../..`. Their own dependencies stay theirs: cobra and bubbletea are `dmosh`'s alone and never enter the daemon's graph.
+
+**No pattern rooted at the repo covers all three.** The `cmd/` modules are separate, so from the root neither `./...` nor `github.com/samwisebuze/dmost/...` matches them — they skip both binaries and their e2e tests and still exit 0. Anything that must cover everything runs once per module:
 
 ```bash
-go build ./... && (cd cmd/dmostd && go build ./...)
-go test  ./... && (cd cmd/dmostd && go test ./...)
-go vet   ./... && (cd cmd/dmostd && go vet ./...)
+go build ./... && (cd cmd/dmostd && go build ./...) && (cd cmd/dmosh && go build ./...)
+go test  ./... && (cd cmd/dmostd && go test  ./...) && (cd cmd/dmosh && go test  ./...)
+go vet   ./... && (cd cmd/dmostd && go vet   ./...) && (cd cmd/dmosh && go vet   ./...)
 
 go test ./pkg/domain/...                                     # one package tree
 (cd cmd/dmostd && go test -run TestUsersAPI_Create ./...)    # one test
 ```
 
-Run the daemon: `(cd cmd/dmostd && go run .)` — listens on `:8080`, debug JSON logs to stdout. `go run github.com/samwisebuze/dmost/cmd/dmostd` does **not** work from the root.
+Run the daemon: `(cd cmd/dmostd && go run .)` — listens on `:8080`, debug JSON logs to stdout. Run the shell against it: `(cd cmd/dmosh && go run . health)`, or `go run .` for the TUI. `go run github.com/samwisebuze/dmost/cmd/dmostd` does **not** work from the root.
 
-Dependency changes mean `go mod tidy` in whichever module changed — the two `go.mod`/`go.sum` pairs are independent, and a dep used by both is listed in both.
+Dependency changes mean `go mod tidy` in whichever module changed — the three `go.mod`/`go.sum` pairs are independent, and a dep used by more than one is listed in each.
 
-New packages under `pkg/` need no `go.mod`; they join the root module. Only add a new module (with a `replace` back to the root) for another `cmd/` executable that should version independently — and extend the two-invocation commands above to cover it.
+New packages under `pkg/` need no `go.mod`; they join the root module. Only add a new module (with a `replace` back to the root) for another `cmd/` executable that should version independently — and extend the per-module commands above to cover it.
 
 ### Reading the API
 
@@ -55,7 +58,7 @@ go doc net/http.Handler
 
 Two gotchas:
 
-- **The import-path form resolves whatever is in the current module's dependency graph** — its own packages, its requirements, the stdlib. `cmd/dmostd` is the one exception: the requirement points *from* it *to* the root, never back, so from the root `go doc github.com/samwisebuze/dmost/cmd/dmostd` fails with `cannot find package` while `go doc ./cmd/dmostd` resolves. Anything under `pkg/` or `internal/` takes either form from either module. A dependency of only one module (`gorilla/mux` is direct in the root, indirect in `cmd/dmostd`) needs no special handling — both graphs contain it.
+- **The import-path form resolves whatever is in the current module's dependency graph** — its own packages, its requirements, the stdlib. The `cmd/` modules are the exception: the requirement points *from* them *to* the root, never back, so from the root `go doc github.com/samwisebuze/dmost/cmd/dmostd` fails with `cannot find package` while `go doc ./cmd/dmostd` resolves. Anything under `pkg/` or `internal/` takes either form from any module. A dependency of only one module needs no special handling as long as you ask from a module that has it — `gorilla/mux` is direct in the root and indirect in `cmd/dmostd`, so both answer; `charm.land/bubbletea/v2` resolves only from `cmd/dmosh`.
 - **`package main` needs `-cmd`.** Without it `go doc ./cmd/dmostd` prints *nothing* and still exits 0 — exported symbols are elided for commands.
 
 ### gopls
@@ -104,9 +107,11 @@ Layered / ports-and-adapters, with dependencies pointing inward toward `pkg/doma
 
 ```
 cmd/dmostd  →  pkg/http  →  pkg/app  →  pkg/domain  ←  internal/infra/inmem
-                    ↘         ↙                     ←  internal/infra/sqlite
-              internal/dto (v1alpha wire types + mappers)
+                 ↑  ↘         ↙                     ←  internal/infra/sqlite
+cmd/dmosh  ──────┘   internal/dto (v1alpha wire types + mappers)
 ```
+
+`cmd/dmosh` enters at `pkg/http.Client` — over the wire, never through `pkg/app`. The shell is a client of a daemon that may not be this process, so it gets the same contract any other client does.
 
 - **`pkg/domain`** — pure domain. Entities keep *all fields unexported* behind read-only getters and embed `Aggregate[T ID]` (`aggregate.go`), which owns identity, `CreatedAt`, and a `version`. An entity is constructible only via its validating constructor or the non-validating `Rehydrate` on its factory (for adapters reconstructing persisted/decoded state). Value objects live in `vo.go`, repository ports beside the entity.
 
@@ -126,6 +131,10 @@ cmd/dmostd  →  pkg/http  →  pkg/app  →  pkg/domain  ←  internal/infra/in
 
   These types are JSON-specific despite the format-neutral path: they carry `json:` tags, and their shapes encode JSON-contract decisions (`name` as one `"First Last"` string, `created_at` as an RFC3339 string). A second format does **not** reuse them — gRPC would use generated `.pb.go` types, and XML would want its own shapes on an independent version line. If a second format ever lands, add a format axis then (`internal/dto/json/v1alpha`, `internal/dto/xml/v1alpha`); don't add `xml:` tags to these structs.
 - **`pkg/http`** — gorilla/mux server *and* a matching `Client` in the same file as each resource's handlers: `user.go` holds the route registration, every handler, and the client methods that call them; `health.go` does the same for `/healthz`. Keep that pairing — end-to-end tests in `cmd/dmostd` drive the real server through this client, so a new handler without a client method leaves them unable to reach it.
+- **`cmd/dmosh`** — the shell: one binary that is both a scriptable CLI (cobra) and a full-screen TUI (bubbletea v2 + lipgloss v2, at the `charm.land/...` module paths, not `github.com/charmbracelet/...`). It is a **walking skeleton** — the only thing it does end to end is probe the daemon's health, and both faces run that one slice: `dmosh health` prints the answer and exits, bare `dmosh` renders it and waits. Its `Main` mirrors the daemon's (streams and `Server` as fields, `Run`/`Close`), so tests drive the whole binary through buffers, and its tests start a real `pkg/http.Server` in-process rather than faking the wire.
+
+  Two things about bubbletea **v2** that v1 answers differ on: `View()` returns a `tea.View` struct, and the alt screen is a field on it (`v.AltScreen = true`) rather than a `tea.WithAltScreen()` program option; key presses arrive as `tea.KeyPressMsg`, not `tea.KeyMsg`. Read the API with `go doc charm.land/bubbletea/v2` **from `cmd/dmosh`** — no other module has it.
+
 - **`pkg/http/problem`** — RFC 7807 `application/problem+json` builder. All error responses go through it (`problem.New().Of(code).WriteTo(w)`); use `Wrap` to expose the cause as `reason` in the body and `WrapSilent` to keep it server-side only.
 - **`internal/infra`** — outbound technical adapters: the code answering *how* something is stored or fetched, usually by owning a connection to something outside the process. One subdirectory per technology, each holding the connection *and* the port implementations that need it (a SQL-backed `UserRepository` lives beside the `*DB` it queries). Repo-private for the same reason `internal/dto` is — a storage backend is an implementation detail, not a published contract.
 
