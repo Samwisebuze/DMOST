@@ -8,7 +8,7 @@ DMOST ("Dungeon Master's Open Source Toolkit") — a personal project exploring 
 
 ## Build & test
 
-There are **three modules and no `go.work`** — each resolves on its own:
+There are **three modules and no committed `go.work`** — each resolves on its own. A local workspace is fine for editor/gopls convenience (`go work init . ./cmd/dmostd ./cmd/dmosh`); `go.work` is gitignored and dockerignored and must never be committed, so everything below must keep working without it:
 
 - `github.com/samwisebuze/dmost` at the repo root — everything under `pkg/`.
 - `github.com/samwisebuze/dmost/cmd/dmostd`, a **nested** module for the daemon.
@@ -84,7 +84,7 @@ gopls references pkg/domain/user.go:40:6 # 1-based line:col, on the identifier
 | repo root | 86 (`pkg/`, `internal/`) | both hits in `cmd/dmostd/user_test.go` |
 | `cmd/dmostd` | 20 (`cmd/`, `pkg/`) | most of the root module's |
 
-Neither is a superset. For a rename or an impact check, run it from both and union — or confirm against `grep -rn`, which is bounded by the filesystem rather than by a module graph.
+Neither is a superset. A local `go.work` (see Build & test) closes the gap — gopls from the root then loads all three modules — but it isn't committed, so don't assume one exists. Without it, for a rename or an impact check, run it from both and union — or confirm against `grep -rn`, which is bounded by the filesystem rather than by a module graph.
 
 ### Docker
 

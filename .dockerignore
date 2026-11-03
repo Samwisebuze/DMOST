@@ -23,3 +23,8 @@ public/
 # The Dockerfile is supplied with -f and is uploaded outside the context, so
 # excluding it keeps the `COPY . .` layer cached across Dockerfile edits.
 docker/
+
+# A local go.work would switch the build into workspace mode, pulling cmd/dmosh's
+# requirements into dmostd's version selection. The image builds each module alone.
+go.work
+go.work.sum

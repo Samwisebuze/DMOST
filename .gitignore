@@ -4,3 +4,10 @@
 # to its source, named after the module directory.
 /cmd/dmostd/dmostd
 /cmd/dmosh/dmosh
+
+# Local Go workspace. Each module must resolve on its own (the Docker build and
+# anyone cloning the repo see no go.work), so a workspace is a per-checkout
+# convenience and never committed. Recreate with:
+#   go work init . ./cmd/dmostd ./cmd/dmosh
+/go.work
+/go.work.sum
