@@ -1,0 +1,85 @@
+# gofab project config. Layers, later wins: defaults in code < this file <
+# ~/.gofab/config.toml < --set. Unknown keys are errors.
+#
+# This repo is three Go modules with no committed go.work: the root,
+# cmd/dmostd and cmd/dmosh. From the root, `./...` silently skips both cmd/
+# modules and still exits 0, so every check below loops over all three. gofab
+# runs a check's argv without a shell and has no per-check working directory,
+# hence the `sh -c` wrappers.
+#
+# A local go.work may exist (it is gitignored). Every Go invocation below sets
+# GOWORK=off: `go` finds go.work by walking up from cmd/dmostd, and in
+# workspace mode each module would build against the others' requirements, so
+# the checks would pass on version selection that neither the Docker build nor
+# a fresh clone ever sees. What ships is each module resolving alone.
+
+[project]
+base_branch = "main"
+finish = "merge"
+# internal/test holds the Must* builders and the repotest port contracts that
+# inmem and sqlite are both run through: test code, so lock it like *_test.go.
+test_patterns = ["**/*_test.go", "**/testdata/**", "internal/test/**"]
+
+# Checks run cheapest first; exactly the first failure is fed back.
+
+# go.work is a per-checkout convenience and is gitignored, but `git add -f`
+# gets past that. A committed one would put every clone and the Docker build
+# into workspace mode. Matches the index, so a staged go.work fails too.
+[[checks]]
+name = "no-go-work"
+command = ["sh", "-c", "if git ls-files --error-unmatch go.work go.work.sum >/dev/null 2>&1 || git ls-files | grep -qE '(^|/)go\\.work(\\.sum)?$'; then echo 'go.work must not be committed: git rm --cached go.work go.work.sum' >&2; exit 1; fi"]
+timeout = "10s"
+
+# The v1alpha character DTOs are generated from the same JSON Schema files the
+# domain embeds and validates against. A schema edit without a regenerate
+# lets the wire shape and the domain rule drift.
+#
+# Regenerates, compares with what was in the tree, then puts the tree back, so
+# the check never edits the worktree itself. Import blocks are left out of the
+# comparison: go-jsonschema writes one `import "x"` per line, while the
+# committed file has the grouped block goimports gives it.
+[[checks]]
+name = "generate"
+command = ["sh", "-c", '''
+set -e
+export GOWORK=off
+f=internal/dto/v1alpha/character/character.gen.go
+t=$(mktemp -d); trap 'cp "$t/before" "$f"; rm -rf "$t"' EXIT
+cp "$f" "$t/before"
+go generate ./internal/...
+strip() { sed -e '/^import (/,/^)/d' -e '/^import /d' "$1"; }
+strip "$t/before" > "$t/committed"; strip "$f" > "$t/generated"
+if ! diff -u "$t/committed" "$t/generated"; then
+  echo "$f is stale: run 'go generate ./internal/...' after editing pkg/domain/character/schema" >&2
+  exit 1
+fi
+''']
+timeout = "2m"
+
+[[checks]]
+name = "build"
+command = ["sh", "-c", "set -e; export GOWORK=off; for m in . cmd/dmostd cmd/dmosh; do echo \"== $m\"; (cd \"$m\" && go build ./...); done"]
+timeout = "3m"
+
+[[checks]]
+name = "vet"
+command = ["sh", "-c", "set -e; export GOWORK=off; for m in . cmd/dmostd cmd/dmosh; do echo \"== $m\"; (cd \"$m\" && go vet ./...); done"]
+timeout = "3m"
+
+[[checks]]
+name = "test"
+command = ["sh", "-c", "set -e; export GOWORK=off; for m in . cmd/dmostd cmd/dmosh; do echo \"== $m\"; (cd \"$m\" && go test -count=1 ./...); done"]
+timeout = "10m"
+tests = true
+
+# One integration test by name, in whichever module holds it (the e2e tests
+# live in cmd/dmostd and cmd/dmosh). {name} is passed as $1 rather than spliced
+# into the script, so a test name can't be read as shell.
+[verify]
+test_command = ["sh", "-c", "set -e; export GOWORK=off; for m in . cmd/dmostd cmd/dmosh; do (cd \"$m\" && go test -count=1 -run \"^$1\\$\" ./...); done", "sh", "{name}"]
+timeout = "10m"
+
+# go.mod/go.sum are matched at any depth by default, which covers all three
+# modules' pairs; listed here so the guard is visible in this file.
+[dependencies]
+files = ["go.mod", "go.sum", "go.work", "go.work.sum", "vendor/"]
