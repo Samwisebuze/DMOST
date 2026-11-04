@@ -5,15 +5,31 @@ import "fmt"
 // Roll evaluates the expression. The Expr is never modified; all per-roll
 // state lives in the returned Result. On error the Result is the zero value.
 func (e *Expr) Roll(rng RNG, resolve func(name string) (int, bool)) (Result, error) {
-	n, v, err := evalNode(e.root, rng, resolve)
+	ev := &evaluator{rng: rng, resolve: resolve}
+	n, v, err := ev.eval(e.root)
 	if err != nil {
 		return Result{}, err
 	}
 	return Result{Total: v, Tree: n}, nil
 }
 
-func evalNode(n node, rng RNG, resolve func(string) (int, bool)) (Node, int, error) {
+// evaluator holds per-roll state. When replay is non-nil, dice terms take
+// their already-rolled (and already marked) dice from it in evaluation order
+// instead of rolling, and keep/drop is not re-applied; this recomputes a
+// grouped keep/drop sub-expression from its kept dice only.
+type evaluator struct {
+	rng     RNG
+	resolve func(string) (int, bool)
+	replay  [][]Die
+}
+
+func (ev *evaluator) eval(n node) (Node, int, error) {
+	resolve := ev.resolve
 	switch x := n.(type) {
+	case *diceTerm:
+		return ev.rollDice(x)
+	case *groupKeep:
+		return ev.groupKeep(x)
 	case *literal:
 		return LiteralNode{Value: x.value}, x.value, nil
 	case *variable:
@@ -27,7 +43,7 @@ func evalNode(n node, rng RNG, resolve func(string) (int, bool)) (Node, int, err
 		}
 		return VariableNode{Name: x.name, Label: x.label, Value: v}, v, nil
 	case *unary:
-		cn, cv, err := evalNode(x.operand, rng, resolve)
+		cn, cv, err := ev.eval(x.operand)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -37,11 +53,11 @@ func evalNode(n node, rng RNG, resolve func(string) (int, bool)) (Node, int, err
 		}
 		return OperatorNode{Op: string(x.op), Operands: []Node{cn}, Value: v}, v, nil
 	case *binary:
-		ln, lv, err := evalNode(x.left, rng, resolve)
+		ln, lv, err := ev.eval(x.left)
 		if err != nil {
 			return nil, 0, err
 		}
-		rn, rv, err := evalNode(x.right, rng, resolve)
+		rn, rv, err := ev.eval(x.right)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -66,7 +82,7 @@ func evalNode(n node, rng RNG, resolve func(string) (int, bool)) (Node, int, err
 		nodes := make([]Node, 0, len(x.args))
 		vals := make([]int, 0, len(x.args))
 		for _, a := range x.args {
-			an, av, err := evalNode(a, rng, resolve)
+			an, av, err := ev.eval(a)
 			if err != nil {
 				return nil, 0, err
 			}
