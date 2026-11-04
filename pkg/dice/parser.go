@@ -14,7 +14,15 @@ import (
 //	term    := unary (('*' | '/') unary)*
 //	unary   := ('-' | '+') unary | primary
 //	primary := INT | [INT] 'd' INT | [INT] 'd%' | [INT] 'dF'
-//	         | '@' name | func '(' args ')' | '(' expr ')'
+//	         | '@' name | func '(' args ')' | '(' expr ')' [keepdrop]
+//	dice    := [INT] ('d' INT | 'd%' | 'dF') mod* [CMP INT]
+//	mod     := ('k' | 'p') ('h' | 'l') INT | ('dh' | 'dl') INT
+//	         | ('rr' | 'ro' | 'r') (CMP INT | INT) | ('e' | '!') [CMP INT]
+//
+// Modifiers are kept in written order. dh/dl alias ph/pl, r aliases rr and !
+// aliases e. A trailing comparison counts successes on the dice group. A
+// keep/drop after a parenthesised expression containing dice is a grouped
+// keep/drop over its '+'-separated items.
 //
 // A dice term or variable may carry a [label] suffix. d% is d100 and dF is a
 // Fudge die with faces -1, 0 and +1. The functions are min(a,b), max(a,b),
@@ -216,6 +224,9 @@ func (p *exprParser) parsePrimary() (node, error) {
 		if _, err := p.expect(tokRParen, "')'"); err != nil {
 			return nil, err
 		}
+		if n, ok := p.peek(); ok && n.kind == tokMod {
+			return p.parseGroupKeep(inner, t.pos)
+		}
 		return inner, nil
 	default:
 		return nil, p.unexpected(t)
@@ -267,6 +278,9 @@ func (p *exprParser) parseDice(count, pos int) (node, error) {
 		d.sides = &literal{value: sides}
 	}
 	if err := p.addNode(pos); err != nil {
+		return nil, err
+	}
+	if err := p.parseDiceMods(d); err != nil {
 		return nil, err
 	}
 	d.label = p.parseLabel()

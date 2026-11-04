@@ -42,9 +42,20 @@ func lex(input string) ([]lexToken, error) {
 	bad := func(pos int, what string) error {
 		return fmt.Errorf("%w: %s at position %d", ErrSyntax, what, pos)
 	}
+	// inDice tracks, in O(1) per token, whether the latest tokens belong to
+	// a dice term (NdS followed by modifiers), so "!=" can be read as explode
+	// with an "=N" selector rather than an unsupported not-equals operator.
+	inDice := false
 	emit := func(k tokenKind, length int) {
 		toks = append(toks, lexToken{k, input[i : i+length], i})
 		i += length
+		switch k {
+		case tokD, tokDPercent, tokDF:
+			inDice = true
+		case tokInt, tokMod, tokCmp:
+		default:
+			inDice = false
+		}
 	}
 	at := func(j int) byte {
 		if j < n {
@@ -110,7 +121,7 @@ func lex(input string) ([]lexToken, error) {
 			}
 			emit(tokCmp, 1)
 		case c == '!':
-			if d := at(i + 1); d == '!' || d == 'p' || d == '=' {
+			if d := at(i + 1); d == '!' || d == 'p' || (d == '=' && !inDice) {
 				return nil, bad(i, "unsupported modifier")
 			}
 			emit(tokMod, 1)
