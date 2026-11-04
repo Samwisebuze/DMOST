@@ -11,6 +11,7 @@ import (
 // counting, the number of kept dice meeting the comparison.
 func (ev *evaluator) rollDice(d *diceTerm) (Node, int, error) {
 	var dice []Die
+	var gr *groupRoller
 	replaying := ev.replay != nil
 	if replaying {
 		if len(ev.replay) == 0 {
@@ -32,13 +33,11 @@ func (ev *evaluator) rollDice(d *diceTerm) (Node, int, error) {
 		if count <= 0 || sides <= 0 {
 			return nil, 0, fmt.Errorf("%w: %dd%d at position %d", ErrSyntax, count, sides, d.pos)
 		}
+		gr = &groupRoller{ev: ev, sides: sides, fudge: d.fudge, pos: d.pos}
 		dice = make([]Die, count)
 		for i := range dice {
-			r := ev.rng.IntN(sides)
-			var face int
-			if d.fudge {
-				face = r - 1 // 0,1,2 -> -1,0,+1
-			} else if face, err = addInt(r, 1); err != nil {
+			face, err := gr.face()
+			if err != nil {
 				return nil, 0, err
 			}
 			dice[i] = Die{Value: face, State: DieKept, RerolledFrom: -1, ExplodedFrom: -1}
@@ -59,11 +58,24 @@ func (ev *evaluator) rollDice(d *diceTerm) (Node, int, error) {
 			}
 			refs := make([]*Die, 0, len(dice))
 			for j := range dice {
-				if dice[j].State == DieKept {
+				if dice[j].State.counts() {
 					refs = append(refs, &dice[j])
 				}
 			}
 			if err := applyKeep(refs, m.kind, n, d.pos); err != nil {
+				return nil, 0, err
+			}
+		case modReroll, modRerollOne, modExplode:
+			if replaying {
+				continue
+			}
+			var err error
+			if m.kind == modExplode {
+				dice, err = gr.explode(dice, m)
+			} else {
+				dice, err = gr.reroll(dice, m)
+			}
+			if err != nil {
 				return nil, 0, err
 			}
 		case modSuccess:
@@ -90,7 +102,7 @@ func (ev *evaluator) diceValue(dice []Die, success *diceMod) (int, error) {
 		}
 		n := 0
 		for _, d := range dice {
-			if d.State == DieKept && compare(d.Value, success.cmp, target) {
+			if d.State.counts() && compare(d.Value, success.cmp, target) {
 				n++
 			}
 		}
@@ -98,7 +110,7 @@ func (ev *evaluator) diceValue(dice []Die, success *diceMod) (int, error) {
 	}
 	sum := 0
 	for _, d := range dice {
-		if d.State != DieKept {
+		if !d.State.counts() {
 			continue
 		}
 		var err error
@@ -188,7 +200,7 @@ func (ev *evaluator) groupKeep(g *groupKeep) (Node, int, error) {
 	var refs []*Die
 	for _, ds := range groups {
 		for j := range ds {
-			if ds[j].State == DieKept {
+			if ds[j].State.counts() {
 				refs = append(refs, &ds[j])
 			}
 		}
