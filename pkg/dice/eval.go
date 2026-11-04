@@ -5,7 +5,7 @@ import "fmt"
 // Roll evaluates the expression. The Expr is never modified; all per-roll
 // state lives in the returned Result. On error the Result is the zero value.
 func (e *Expr) Roll(rng RNG, resolve func(name string) (int, bool)) (Result, error) {
-	ev := &evaluator{rng: rng, resolve: resolve}
+	ev := &evaluator{rng: rng, resolve: resolve, limits: e.limits.withDefaults()}
 	n, v, err := ev.eval(e.root)
 	if err != nil {
 		return Result{}, err
@@ -21,6 +21,7 @@ type evaluator struct {
 	rng     RNG
 	resolve func(string) (int, bool)
 	replay  [][]Die
+	limits  Limits
 }
 
 func (ev *evaluator) eval(n node) (Node, int, error) {
