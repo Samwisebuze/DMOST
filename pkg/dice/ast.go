@@ -38,7 +38,8 @@ type diceTerm struct {
 	pos          int
 }
 
-// diceMod is a reroll/explode modifier.
+// diceMod is a keep/drop, reroll, explode or success-counting modifier;
+// see the mod* constants for kinds.
 type diceMod struct {
 	kind string
 	cmp  string
@@ -55,7 +56,7 @@ type funcCall struct {
 // groupKeep is a group of terms with keep/drop applied.
 type groupKeep struct {
 	items []node
-	kind  string // "kh", "kl", "dh", "dl"
+	kind  string // "kh", "kl", "ph", "pl"
 	count node
 	label string
 	pos   int
