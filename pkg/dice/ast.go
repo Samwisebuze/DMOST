@@ -2,8 +2,9 @@ package dice
 
 // Expr is a parsed, immutable expression.
 type Expr struct {
-	root node
-	src  string
+	root   node
+	src    string
+	limits Limits // limits in force, set at parse time
 }
 
 type node interface{ isNode() }
@@ -11,8 +12,9 @@ type node interface{ isNode() }
 type literal struct{ value int }
 
 type variable struct {
-	name string
-	pos  int
+	name  string
+	label string
+	pos   int
 }
 
 type unary struct {
@@ -31,6 +33,7 @@ type binary struct {
 type diceTerm struct {
 	count, sides node
 	label        string
+	fudge        bool // dF: faces -1, 0, +1; sides is unused
 	mods         []diceMod
 	pos          int
 }
