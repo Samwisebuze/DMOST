@@ -173,6 +173,20 @@ func TestParseLabelPlacement(t *testing.T) {
 	}
 }
 
+func TestParseRejectsMalformedFuzzInputs(t *testing.T) {
+	for _, input := range []string{
+		"[Čͱ]",
+		"(0)p",
+		strings.Repeat("(", 200),
+	} {
+		t.Run(input, func(t *testing.T) {
+			expr, err := Parse(input)
+			assert.Nil(t, expr)
+			assert.ErrorIs(t, err, ErrSyntax)
+		})
+	}
+}
+
 func TestParseSyntaxErrors(t *testing.T) {
 	tests := []struct {
 		in  string

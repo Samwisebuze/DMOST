@@ -1,18 +1,15 @@
 package dice
 
-type tb interface {
-	Helper()
-	Fatalf(format string, args ...any)
-}
+import "testing"
 
 // fakeRNG returns scripted face values in order; IntN(n) = face-1.
 type fakeRNG struct {
-	t     tb
+	t     testing.TB
 	faces []int
 	pos   int
 }
 
-func newFakeRNG(t tb, faces ...int) *fakeRNG { return &fakeRNG{t: t, faces: faces} }
+func newFakeRNG(t testing.TB, faces ...int) *fakeRNG { return &fakeRNG{t: t, faces: faces} }
 
 func (f *fakeRNG) IntN(n int) int {
 	f.t.Helper()
