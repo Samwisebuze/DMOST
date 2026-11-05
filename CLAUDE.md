@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 DMOST ("Dungeon Master's Open Source Toolkit") — a personal project exploring native, local-first application design in Go. Module path prefix: `github.com/samwisebuze/dmost`.
 
+Read [CORE_BELIEFS.md](CORE_BELIEFS.md) when making product or design decisions, or when the direction is unclear in a greenfield area. Use its principles to evaluate tradeoffs before choosing an approach.
+
 ## Build & test
 
 There are **three modules and no committed `go.work`** — each resolves on its own. A local workspace is fine for editor/gopls convenience (`go work init . ./cmd/dmostd ./cmd/dmosh`); `go.work` is gitignored and dockerignored and must never be committed, so everything below must keep working without it:
