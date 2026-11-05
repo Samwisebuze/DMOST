@@ -1,4 +1,5 @@
 .vscode
+/.claude/
 
 # Compiled binaries. `go build` inside a cmd/ module drops the executable next
 # to its source, named after the module directory.
@@ -11,3 +12,9 @@
 #   go work init . ./cmd/dmostd ./cmd/dmosh
 /go.work
 /go.work.sum
+
+# Local long-horizon run memory; these files never enter commits or PRs.
+/docs/prompt.md
+/docs/plans.md
+/docs/implement.md
+/docs/documentation.md
