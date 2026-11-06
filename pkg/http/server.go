@@ -13,17 +13,20 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/samwisebuze/dmost/pkg/app"
 	"github.com/samwisebuze/dmost/pkg/http/problem"
+	"github.com/samwisebuze/dmost/pkg/session"
 	"golang.org/x/crypto/acme/autocert"
 )
 
 // ShutdownTimeout is the time given for outstanding requests to finish before shutdown.
-const ShutdownTimeout = 1 * time.Second
+const ShutdownTimeout = 5 * time.Second
 
 type Server struct {
-	ln     net.Listener
-	router *mux.Router
-	server *http.Server
-	app    *app.App
+	ln           net.Listener
+	router       *mux.Router
+	server       *http.Server
+	app          *app.App
+	localSession *session.Session
+	hostToken    string
 
 	Addr   string
 	Domain string

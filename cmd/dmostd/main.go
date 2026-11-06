@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,6 +16,7 @@ import (
 	"github.com/samwisebuze/dmost/pkg/app"
 	"github.com/samwisebuze/dmost/pkg/app/services"
 	"github.com/samwisebuze/dmost/pkg/http"
+	"github.com/samwisebuze/dmost/pkg/session"
 )
 
 func main() {
@@ -20,6 +24,9 @@ func main() {
 	// check on the daemon already running beside it. It never returns.
 	healthcheck := flag.Bool("healthcheck", false,
 		"probe a running daemon and exit 0 if healthy, 1 if not")
+	local := flag.Bool("local", false, "host an ephemeral local table")
+	listen := flag.String("listen", ":8080", "listen address for local mode")
+	advertise := flag.String("advertise", "", "LAN IPv4 address to show players (auto-detect if empty)")
 	flag.Parse()
 
 	if *healthcheck {
@@ -38,6 +45,9 @@ func main() {
 	// Instantiate a new type to represent our application.
 	// This type lets us shared setup code with our end-to-end tests.
 	m := NewMain()
+	m.LocalMode = *local
+	m.HTTPServer.Addr = *listen
+	m.AdvertiseIP = *advertise
 	//TODO: Load config from env
 
 	// Execute program.
@@ -63,7 +73,11 @@ type Main struct {
 	HTTPServer *http.Server
 
 	// Application services are attached to it before running.
-	App app.App
+	App          app.App
+	LocalMode    bool
+	AdvertiseIP  string
+	LocalSession *session.Session
+	HostToken    string
 }
 
 // NewMain returns a new instance of Main.
@@ -75,6 +89,9 @@ func NewMain() *Main {
 
 // Close gracefully stops the program.
 func (m *Main) Close() error {
+	if m.LocalSession != nil {
+		m.LocalSession.End()
+	}
 	if m.HTTPServer != nil {
 		if err := m.HTTPServer.Close(); err != nil {
 			return err
@@ -96,11 +113,65 @@ func (m *Main) Run(ctx context.Context) (err error) {
 	}
 
 	m.HTTPServer.SetApp(m.App)
+	if m.LocalMode {
+		var err error
+		m.LocalSession, err = session.New()
+		if err != nil {
+			return err
+		}
+		m.HostToken, err = randomHostToken()
+		if err != nil {
+			return err
+		}
+		m.HTTPServer.SetLocalSession(m.LocalSession, m.HostToken)
+	}
 
 	// Start the HTTP server.
 	if err := m.HTTPServer.Open(); err != nil {
 		return err
 	}
+	if m.LocalMode {
+		ip := m.AdvertiseIP
+		if ip == "" {
+			var err error
+			ip, err = localIPv4()
+			if err != nil {
+				return err
+			}
+		}
+		fmt.Printf("Local table: http://%s:%d/\nJoin code: %s\nHost token: %s\n", ip, m.HTTPServer.Port(), m.LocalSession.Code(), m.HostToken)
+	}
 
 	return nil
+}
+
+func localIPv4() (string, error) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return "", err
+	}
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ip, _, err := net.ParseCIDR(addr.String())
+			if err == nil && ip.To4() != nil && ip.IsPrivate() {
+				return ip.String(), nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no private LAN IPv4 address found; pass --advertise")
+}
+
+func randomHostToken() (string, error) {
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
 }

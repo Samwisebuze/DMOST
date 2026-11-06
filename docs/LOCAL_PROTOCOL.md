@@ -7,7 +7,7 @@ This protocol is transient: restarting the daemon creates a new table and invali
 | `POST /api/local/v1/join` | `{ "code": string, "name": string }` | `{ "token": string, "participant": Participant }` |
 | `GET /api/local/v1/state` | `Authorization: Bearer <token>` | `{ "participants": Participant[], "sequence": number }` |
 | `POST /api/local/v1/messages` | Bearer token; `{ "text": string }` | `Message` |
-| `GET /api/local/v1/events?after=<sequence>` | Bearer token, or `Last-Event-ID` | SSE stream |
+| `GET /api/local/v1/events?after=<sequence>` | EventSource cookie set by join, or Bearer token; `Last-Event-ID` is also accepted | SSE stream |
 | `POST /api/local/v1/end` | Host control token | `{ "ended": true }` |
 
 `Participant` is `{ "id": string, "name": string, "online": boolean }`. `Message` is `{ "id": number, "participant": string, "text": string }`. Each SSE event has `id: <sequence>`, `event: <type>`, and `data: <Event JSON>`. Event JSON contains `sequence` and `type`, plus `participant` for `participant` events or `message` for `message` events. `ended` has neither. Sequence numbers increase across all event types. Message IDs equal their event sequence.

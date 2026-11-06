@@ -11,5 +11,5 @@ if [[ -n "$unformatted" ]]; then
 fi
 for module in . cmd/dmostd cmd/dmosh; do
   echo "== $module =="
-  (cd "$module" && go vet ./... && go test -count=1 ./... && go build ./...)
+  (cd "$module" && go vet ./... && go test -count=1 -parallel 1 ./... && go build ./...)
 done
