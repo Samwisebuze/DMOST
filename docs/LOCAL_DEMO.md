@@ -28,3 +28,5 @@ On Android Chrome, open the printed bootstrap address, compare the fingerprint, 
 ## Automated smoke check
 
 `./scripts/check-local-demo.sh` starts a loopback-only host, fetches the single bootstrap address and CA download, follows the HTTPS link with the generated CA, and confirms the PWA shell is served. `./scripts/quality-gate.sh` runs the three Go modules and web checks. These checks establish the host-side path; physical browser trust and installation remain device validation.
+
+If Firefox and geckodriver are installed, `node scripts/browser-smoke.mjs` opens the PWA in headless Firefox, joins as one player, sends a message from a second HTTP client, and verifies the browser receives it live. It uses a loopback HTTP host because browsers treat localhost as a secure context; the separate HTTPS smoke check verifies the actual LAN certificate path.

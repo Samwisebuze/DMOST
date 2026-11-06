@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-//go:embed web/index.html web/app.css web/app.js web/sw.js web/icon.svg web/manifest.webmanifest
+//go:embed web/index.html web/app.css web/app.js web/client.mjs web/sw.js web/icon.svg web/icon-192.png web/icon-512.png web/manifest.webmanifest
 var webAssets embed.FS
 
 func (s *Server) registerLocalWeb() {
@@ -18,7 +18,7 @@ func (s *Server) registerLocalWeb() {
 			name = "index.html"
 		}
 		switch name {
-		case "index.html", "app.css", "app.js", "sw.js", "icon.svg", "manifest.webmanifest":
+		case "index.html", "app.css", "app.js", "client.mjs", "sw.js", "icon.svg", "icon-192.png", "icon-512.png", "manifest.webmanifest":
 		default:
 			s.handleNotFound(w, r)
 			return
@@ -31,6 +31,9 @@ func (s *Server) registerLocalWeb() {
 		contentType := mime.TypeByExtension(path.Ext(name))
 		if name == "manifest.webmanifest" {
 			contentType = "application/manifest+json"
+		}
+		if name == "client.mjs" {
+			contentType = "text/javascript; charset=utf-8"
 		}
 		if contentType != "" {
 			w.Header().Set("Content-Type", contentType)

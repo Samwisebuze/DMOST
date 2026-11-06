@@ -6,13 +6,26 @@
   <meta name="theme-color" content="#211b35">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon-192.png">
   <link rel="stylesheet" href="/app.css">
   <title>DMOST Local Table</title>
 </head>
 <body>
   <main>
     <h1>DMOST Local Table</h1>
-    <p id="status" role="status">App shell ready. Session controls are being built.</p>
+    <p id="status" role="status">Enter the code from your DM to join.</p>
+    <form id="join-form">
+      <label>Your name <input name="name" autocomplete="name" maxlength="60" required></label>
+      <label>Join code <input name="code" autocapitalize="characters" autocomplete="off" required></label>
+      <button type="submit">Join table</button>
+      <p id="join-error" role="alert"></p>
+    </form>
+    <section aria-label="Table" class="table-layout">
+      <div><h2>Players</h2><ul id="members"></ul></div>
+      <div><h2>Messages</h2><ol id="messages" aria-live="polite"></ol>
+        <form id="chat-form" hidden><label class="sr-only" for="message">Message</label><input id="message" name="message" maxlength="2000" placeholder="Message the table" required><button type="submit">Send</button></form>
+      </div>
+    </section>
   </main>
   <script type="module" src="/app.js"></script>
 </body>

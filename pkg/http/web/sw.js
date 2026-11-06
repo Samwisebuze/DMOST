@@ -1,5 +1,5 @@
 const CACHE = 'dmost-shell-v1';
-const ASSETS = ['/', '/app.css', '/app.js', '/manifest.webmanifest', '/icon.svg'];
+const ASSETS = ['/', '/app.css', '/app.js', '/client.mjs', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)));
 });

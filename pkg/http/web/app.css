@@ -1,3 +1,19 @@
 :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #211b35; color: #f9f4eb; }
-body { margin: 0; min-height: 100vh; display: grid; place-items: center; }
-main { width: min(36rem, calc(100% - 2rem)); }
+body { margin: 0; min-height: 100vh; }
+main { width: min(60rem, calc(100% - 2rem)); margin: 2rem auto; }
+h1 { color: #f6ce7f; }
+form { display: flex; flex-wrap: wrap; gap: .7rem; align-items: end; margin: 1rem 0; }
+label { display: grid; gap: .35rem; }
+input { font: inherit; padding: .65rem; border: 2px solid #9587ad; border-radius: .45rem; color: #211b35; background: #fff; max-width: 100%; }
+button { font: inherit; padding: .7rem 1rem; border: 0; border-radius: .45rem; background: #f6ce7f; color: #211b35; font-weight: 700; }
+button:focus-visible, input:focus-visible { outline: 3px solid #8bc9e8; outline-offset: 2px; }
+[hidden] { display: none !important; }
+#join-error { color: #ffc3c3; width: 100%; }
+#status { padding: .7rem; background: #392f54; border-radius: .45rem; }
+#status[data-state="disconnected"], #status[data-state="resync"] { background: #77522d; }
+.table-layout { display: grid; grid-template-columns: minmax(9rem, 1fr) minmax(0, 3fr); gap: 1.5rem; }
+ul, ol { padding-left: 1.5rem; }
+#messages { min-height: 12rem; max-height: 55vh; overflow-y: auto; background: #302744; padding: 1rem 1rem 1rem 2.5rem; border-radius: .5rem; }
+#messages li { margin-bottom: .7rem; overflow-wrap: anywhere; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+@media (max-width: 600px) { .table-layout { grid-template-columns: 1fr; gap: 0; } #messages { min-height: 8rem; } }
