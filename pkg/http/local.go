@@ -23,6 +23,7 @@ func (s *Server) SetLocalSession(table *session.Session, hostToken string) {
 	api.HandleFunc("/messages", s.localSend).Methods(http.MethodPost)
 	api.HandleFunc("/events", s.localEvents).Methods(http.MethodGet)
 	api.HandleFunc("/end", s.localEnd).Methods(http.MethodPost)
+	s.registerLocalWeb()
 }
 
 func (s *Server) localJoin(w http.ResponseWriter, r *http.Request) {

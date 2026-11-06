@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
@@ -27,6 +28,7 @@ type Server struct {
 	app          *app.App
 	localSession *session.Session
 	hostToken    string
+	LocalTLS     *tls.Certificate
 
 	Addr   string
 	Domain string
@@ -75,7 +77,12 @@ func (s *Server) Open() (err error) {
 	// Begin serving requests on the listener. We use Serve() instead of
 	// ListenAndServe() because it allows us to check for listen errors (such
 	// as trying to use an already open port) synchronously.
-	go s.server.Serve(s.ln)
+	if s.LocalTLS != nil {
+		listener := tls.NewListener(s.ln, &tls.Config{Certificates: []tls.Certificate{*s.LocalTLS}, MinVersion: tls.VersionTLS12})
+		go s.server.Serve(listener)
+	} else {
+		go s.server.Serve(s.ln)
+	}
 
 	slog.Debug(fmt.Sprintf("http server listening on %s", s.URL()))
 	return nil
@@ -92,7 +99,7 @@ func (s *Server) Close() error {
 
 // UseTLS returns true if the cert & key file are specified.
 func (s *Server) UseTLS() bool {
-	return s.Domain != ""
+	return s.Domain != "" || s.LocalTLS != nil
 }
 
 // Scheme returns the URL scheme for the server.

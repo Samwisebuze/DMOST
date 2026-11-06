@@ -3,14 +3,19 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/pem"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net"
+	stdhttp "net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/samwisebuze/dmost/internal/infra/inmem"
 	"github.com/samwisebuze/dmost/pkg/app"
@@ -25,7 +30,10 @@ func main() {
 	healthcheck := flag.Bool("healthcheck", false,
 		"probe a running daemon and exit 0 if healthy, 1 if not")
 	local := flag.Bool("local", false, "host an ephemeral local table")
+	localHTTPS := flag.Bool("local-https", false, "serve a local table over HTTPS")
 	listen := flag.String("listen", ":8080", "listen address for local mode")
+	bootstrapListen := flag.String("bootstrap-listen", ":8081", "HTTP bootstrap listen address")
+	certDir := flag.String("cert-dir", ".dmost-local", "directory for the local CA")
 	advertise := flag.String("advertise", "", "LAN IPv4 address to show players (auto-detect if empty)")
 	flag.Parse()
 
@@ -45,9 +53,12 @@ func main() {
 	// Instantiate a new type to represent our application.
 	// This type lets us shared setup code with our end-to-end tests.
 	m := NewMain()
-	m.LocalMode = *local
+	m.LocalMode = *local || *localHTTPS
+	m.LocalHTTPS = *localHTTPS
 	m.HTTPServer.Addr = *listen
 	m.AdvertiseIP = *advertise
+	m.BootstrapAddr = *bootstrapListen
+	m.CertDir = *certDir
 	//TODO: Load config from env
 
 	// Execute program.
@@ -73,11 +84,16 @@ type Main struct {
 	HTTPServer *http.Server
 
 	// Application services are attached to it before running.
-	App          app.App
-	LocalMode    bool
-	AdvertiseIP  string
-	LocalSession *session.Session
-	HostToken    string
+	App             app.App
+	LocalMode       bool
+	LocalHTTPS      bool
+	AdvertiseIP     string
+	BootstrapAddr   string
+	CertDir         string
+	BootstrapServer *stdhttp.Server
+	localCAPEM      []byte
+	LocalSession    *session.Session
+	HostToken       string
 }
 
 // NewMain returns a new instance of Main.
@@ -91,6 +107,13 @@ func NewMain() *Main {
 func (m *Main) Close() error {
 	if m.LocalSession != nil {
 		m.LocalSession.End()
+	}
+	if m.BootstrapServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := m.BootstrapServer.Shutdown(ctx); err != nil {
+			return err
+		}
 	}
 	if m.HTTPServer != nil {
 		if err := m.HTTPServer.Close(); err != nil {
@@ -113,7 +136,19 @@ func (m *Main) Run(ctx context.Context) (err error) {
 	}
 
 	m.HTTPServer.SetApp(m.App)
+	var ip string
 	if m.LocalMode {
+		ip = m.AdvertiseIP
+		if ip == "" {
+			var err error
+			ip, err = localIPv4()
+			if err != nil {
+				return err
+			}
+		}
+		if net.ParseIP(ip) == nil {
+			return fmt.Errorf("invalid advertised IP %q", ip)
+		}
 		var err error
 		m.LocalSession, err = session.New()
 		if err != nil {
@@ -124,6 +159,14 @@ func (m *Main) Run(ctx context.Context) (err error) {
 			return err
 		}
 		m.HTTPServer.SetLocalSession(m.LocalSession, m.HostToken)
+		if m.LocalHTTPS {
+			cert, caPEM, err := localCertificate(m.CertDir, ip)
+			if err != nil {
+				return err
+			}
+			m.HTTPServer.LocalTLS = &cert
+			m.localCAPEM = caPEM
+		}
 	}
 
 	// Start the HTTP server.
@@ -131,15 +174,20 @@ func (m *Main) Run(ctx context.Context) (err error) {
 		return err
 	}
 	if m.LocalMode {
-		ip := m.AdvertiseIP
-		if ip == "" {
-			var err error
-			ip, err = localIPv4()
+		if m.LocalHTTPS {
+			port, err := m.startBootstrap(ip)
 			if err != nil {
+				_ = m.HTTPServer.Close()
 				return err
 			}
+			fmt.Printf("Open on your device: http://%s:%d/\n", ip, port)
+			block, _ := pem.Decode(m.localCAPEM)
+			sum := sha256.Sum256(block.Bytes)
+			fmt.Printf("CA fingerprint: %s\n", hex.EncodeToString(sum[:]))
+		} else {
+			fmt.Printf("Local table: http://%s:%d/\n", ip, m.HTTPServer.Port())
 		}
-		fmt.Printf("Local table: http://%s:%d/\nJoin code: %s\nHost token: %s\n", ip, m.HTTPServer.Port(), m.LocalSession.Code(), m.HostToken)
+		fmt.Printf("Join code: %s\nHost token: %s\n", m.LocalSession.Code(), m.HostToken)
 	}
 
 	return nil
