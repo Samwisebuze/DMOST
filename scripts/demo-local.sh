@@ -17,10 +17,12 @@ for ((i=0; i<100; i++)); do
   if ! kill -0 "$pid" 2>/dev/null; then cat "$log_file" >&2; exit 1; fi
   address="$(sed -n 's/^Open on your device: //p' "$log_file" | head -1)"
   code="$(sed -n 's/^Join code: //p' "$log_file" | head -1)"
-  if [[ -n "$address" && -n "$code" ]]; then break; fi
+  fingerprint="$(sed -n 's/^CA fingerprint: //p' "$log_file" | head -1)"
+  if [[ -n "$address" && -n "$code" && -n "$fingerprint" ]]; then break; fi
   sleep .1
 done
-if [[ -z "${address:-}" || -z "${code:-}" ]]; then cat "$log_file" >&2; exit 1; fi
+if [[ -z "${address:-}" || -z "${code:-}" || -z "${fingerprint:-}" ]]; then cat "$log_file" >&2; exit 1; fi
 printf 'Open this one address on your device: %s\nJoin code: %s\n' "$address" "$code"
+printf 'CA fingerprint: %s\n' "$fingerprint"
 printf 'Press Ctrl+C to end the table. Host log: %s\n' "$log_file"
 wait "$pid"

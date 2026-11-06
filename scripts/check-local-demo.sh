@@ -22,4 +22,18 @@ app="$(sed -n 's/.*href="\(https:[^"]*\)".*/\1/p' "$tmp/bootstrap.html" | head -
 if [[ -z "$app" ]]; then echo 'HTTPS app link missing' >&2; exit 1; fi
 curl --noproxy '*' --fail --silent --cacert "$tmp/certs/ca.pem" "$app" >"$tmp/app.html"
 rg -q 'DMOST Local Table' "$tmp/app.html"
-echo 'Local bootstrap and trusted HTTPS app: pass'
+for asset in manifest.webmanifest sw.js app.js client.mjs icon-192.png icon-512.png; do
+  curl --noproxy '*' --fail --silent --cacert "$tmp/certs/ca.pem" "${app}${asset}" -o "$tmp/$asset"
+  test -s "$tmp/$asset"
+done
+node -e 'const fs=require("fs"); const m=JSON.parse(fs.readFileSync(process.argv[1])); if(m.display!=="standalone"||m.icons.length<2) process.exit(1)' "$tmp/manifest.webmanifest"
+code="$(sed -n 's/^Join code: //p' "$tmp/host.log" | head -1)"
+for name in Ada Bob; do
+  printf '{"code":"%s","name":"%s"}' "$code" "$name" | curl --noproxy '*' --fail --silent --cacert "$tmp/certs/ca.pem" -H 'Content-Type: application/json' --data-binary @- "${app}api/local/v1/join" >"$tmp/join-$name.json"
+done
+for name in Ada Bob; do
+  token="$(node -e 'const fs=require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1])).token)' "$tmp/join-$name.json")"
+  printf '{"text":"hello from %s"}' "$name" | curl --noproxy '*' --fail --silent --cacert "$tmp/certs/ca.pem" -H 'Content-Type: application/json' -H "Authorization: Bearer $token" --data-binary @- "${app}api/local/v1/messages" >"$tmp/message-$name.json"
+done
+node -e 'const fs=require("fs"); const a=JSON.parse(fs.readFileSync(process.argv[1])); const b=JSON.parse(fs.readFileSync(process.argv[2])); if(a.id>=b.id||a.participant===b.participant) process.exit(1)' "$tmp/message-Ada.json" "$tmp/message-Bob.json"
+echo 'Local bootstrap, trusted HTTPS app, and two-client messaging: pass'
