@@ -1,6 +1,9 @@
 import { spawn } from 'node:child_process';
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:net';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const children = [];
@@ -24,15 +27,16 @@ const waitFor = async (condition, label) => {
 };
 
 const sessions = [];
+const certDir = mkdtempSync(join(tmpdir(), 'dmost-browser-smoke-'));
 try {
   execFileSync('go', ['build', './...'], { cwd: 'cmd/dmostd', stdio: 'inherit', env: { ...process.env, GOWORK: 'off', GOCACHE: process.env.GOCACHE || '/tmp/dmost-go-build-cache' } });
   const hostPort = await freePort();
-  const host = launch('cmd/dmostd/dmostd', ['--local', '--advertise', '127.0.0.1', '--listen', `127.0.0.1:${hostPort}`]);
+  const host = launch('cmd/dmostd/dmostd', ['--local-https', '--advertise', '127.0.0.1', '--listen', `127.0.0.1:${hostPort}`, '--bootstrap-listen', '127.0.0.1:0', '--cert-dir', certDir]);
   let hostOutput = '';
   host.stdout.on('data', chunk => { hostOutput += chunk; });
   host.stderr.on('data', chunk => { hostOutput += chunk; });
   const code = await waitFor(() => hostOutput.match(/^Join code: (\S+)/m)?.[1], 'host join code');
-  const hostURL = `http://127.0.0.1:${hostPort}/`;
+  const hostURL = await waitFor(() => hostOutput.match(/^Open on this computer: (\S+)/m)?.[1], 'host browser address');
   const openBrowser = async name => {
     const driverPort = await freePort();
     const driverURL = `http://127.0.0.1:${driverPort}`;
@@ -84,4 +88,5 @@ try {
 } finally {
   for (const { driverURL, sessionID } of sessions) await fetch(`${driverURL}/session/${sessionID}`, { method: 'DELETE' }).catch(() => {});
   for (const child of children.reverse()) child.kill('SIGTERM');
+  rmSync(certDir, { recursive: true, force: true });
 }

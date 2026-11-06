@@ -14,6 +14,7 @@ var bootstrapPage = template.Must(template.New("bootstrap").Parse(`<!doctype htm
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>DMOST Local Table setup</title><style>body{font:1.1rem system-ui;margin:2rem auto;max-width:38rem;padding:0 1rem;line-height:1.5}a{display:inline-block;padding:.7rem 1rem;background:#211b35;color:white;border-radius:.5rem}</style></head>
 <body><h1>Join the local table</h1><p>This page is served by the DM's computer on the local network. Before installing its certificate, compare this fingerprint with the one on the DM's computer: <strong>{{.Fingerprint}}</strong>.</p>
 <ol><li><a href="/dmost-ca.cer">Download the local table certificate</a>.</li><li>On iPhone or iPad, open Settings → Profile Downloaded and install the profile. Then open Settings → General → About → Certificate Trust Settings and enable full trust for “DMOST Local Table CA”.</li><li><a href="{{.AppURL}}">Open the secure app</a>. In Safari, use Share → Add to Home Screen.</li><li>Enter the join code shown on the DM's computer.</li></ol>
+<p>On the DM's computer, use <a href="{{.BrowserURL}}">the local browser app</a>. It stays on this computer and needs no certificate installation.</p>
 <p>Only trust this certificate for a DM you know. You can remove it from your device settings after the game.</p></body></html>`))
 
 func (m *Main) startBootstrap(ip string) (int, error) {
@@ -41,7 +42,7 @@ func (m *Main) startBootstrap(ip string) (int, error) {
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		_ = bootstrapPage.Execute(w, struct{ AppURL, Fingerprint string }{appURL, fingerprint})
+		_ = bootstrapPage.Execute(w, struct{ AppURL, BrowserURL, Fingerprint string }{appURL, m.BrowserURL, fingerprint})
 	})
 	mux.HandleFunc("GET /dmost-ca.cer", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-x509-ca-cert")
@@ -52,4 +53,23 @@ func (m *Main) startBootstrap(ip string) (int, error) {
 	m.BootstrapServer = &http.Server{Handler: mux}
 	go m.BootstrapServer.Serve(ln)
 	return ln.Addr().(*net.TCPAddr).Port, nil
+}
+
+func (m *Main) startLocalBrowser() (string, error) {
+	addr := m.BrowserAddr
+	if addr == "" {
+		addr = "127.0.0.1:0"
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return "", err
+	}
+	tcpAddr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok || !tcpAddr.IP.IsLoopback() {
+		_ = ln.Close()
+		return "", fmt.Errorf("browser listener must bind a loopback address")
+	}
+	m.BrowserServer = &http.Server{Handler: m.HTTPServer.Handler()}
+	go m.BrowserServer.Serve(ln)
+	return fmt.Sprintf("http://localhost:%d/", tcpAddr.Port), nil
 }

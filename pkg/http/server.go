@@ -63,6 +63,10 @@ func NewServer() *Server {
 
 func (s *Server) SetApp(a app.App) { *s.app = a }
 
+// Handler returns the same router used by the primary listener. Local mode
+// also serves it on a loopback-only HTTP listener for the host's own browser.
+func (s *Server) Handler() http.Handler { return s.server.Handler }
+
 // Open validates the server options and begins listening on the bind address.
 func (s *Server) Open() (err error) {
 	// Open a listener on our bind address.

@@ -73,6 +73,36 @@ func TestLocalSessionTwoClients(t *testing.T) {
 	resp.Body.Close()
 }
 
+func TestLocalHTTPSHostBrowserNeedsNoCA(t *testing.T) {
+	m := main.NewMain()
+	m.LocalMode = true
+	m.LocalHTTPS = true
+	m.AdvertiseIP = "127.0.0.1"
+	m.HTTPServer.Addr = "127.0.0.1:0"
+	m.BootstrapAddr = "127.0.0.1:0"
+	m.BrowserAddr = "127.0.0.1:0"
+	m.CertDir = t.TempDir()
+	if err := m.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if !strings.HasPrefix(m.BrowserURL, "http://localhost:") {
+		t.Fatalf("host browser URL %q", m.BrowserURL)
+	}
+	resp, err := http.Get(m.BrowserURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("host browser app status %d", resp.StatusCode)
+	}
+	token := join(t, m.BrowserURL+"api/local/v1", m.LocalSession.Code(), "Host")
+	if token == "" {
+		t.Fatal("host browser join failed")
+	}
+}
+
 func join(t *testing.T, base, code, name string) string {
 	t.Helper()
 	resp := postJSON(t, base+"/join", "", map[string]string{"code": code, "name": name})

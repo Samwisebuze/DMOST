@@ -16,7 +16,11 @@ for ((i=0; i<100; i++)); do
 done
 if [[ -z "${address:-}" ]]; then cat "$tmp/host.log" >&2; exit 1; fi
 [[ "$(rg -c '^Open on your device: ' "$tmp/host.log")" == 1 ]]
+browser_address="$(sed -n 's/^Open on this computer: //p' "$tmp/host.log" | head -1)"
+[[ "$browser_address" == http://localhost:* ]]
 curl --noproxy '*' --fail --silent "$address" >"$tmp/bootstrap.html"
+curl --noproxy '*' --fail --silent "$browser_address" >"$tmp/host-browser.html"
+rg -q 'DMOST Local Table' "$tmp/host-browser.html"
 curl --noproxy '*' --fail --silent "${address}dmost-ca.cer" >"$tmp/ca.cer"
 app="$(sed -n 's/.*href="\(https:[^"]*\)".*/\1/p' "$tmp/bootstrap.html" | head -1)"
 if [[ -z "$app" ]]; then echo 'HTTPS app link missing' >&2; exit 1; fi

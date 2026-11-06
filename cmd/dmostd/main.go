@@ -33,6 +33,7 @@ func main() {
 	localHTTPS := flag.Bool("local-https", false, "serve a local table over HTTPS")
 	listen := flag.String("listen", ":8080", "listen address for local mode")
 	bootstrapListen := flag.String("bootstrap-listen", ":8081", "HTTP bootstrap listen address")
+	browserListen := flag.String("browser-listen", "127.0.0.1:0", "loopback HTTP address for the host browser")
 	certDir := flag.String("cert-dir", ".dmost-local", "directory for the local CA")
 	advertise := flag.String("advertise", "", "LAN IPv4 address to show players (auto-detect if empty)")
 	flag.Parse()
@@ -58,6 +59,7 @@ func main() {
 	m.HTTPServer.Addr = *listen
 	m.AdvertiseIP = *advertise
 	m.BootstrapAddr = *bootstrapListen
+	m.BrowserAddr = *browserListen
 	m.CertDir = *certDir
 	//TODO: Load config from env
 
@@ -91,6 +93,9 @@ type Main struct {
 	BootstrapAddr   string
 	CertDir         string
 	BootstrapServer *stdhttp.Server
+	BrowserAddr     string
+	BrowserServer   *stdhttp.Server
+	BrowserURL      string
 	localCAPEM      []byte
 	LocalSession    *session.Session
 	HostToken       string
@@ -112,6 +117,13 @@ func (m *Main) Close() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := m.BootstrapServer.Shutdown(ctx); err != nil {
+			return err
+		}
+	}
+	if m.BrowserServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := m.BrowserServer.Shutdown(ctx); err != nil {
 			return err
 		}
 	}
@@ -175,12 +187,21 @@ func (m *Main) Run(ctx context.Context) (err error) {
 	}
 	if m.LocalMode {
 		if m.LocalHTTPS {
-			port, err := m.startBootstrap(ip)
+			browserURL, err := m.startLocalBrowser()
 			if err != nil {
 				_ = m.HTTPServer.Close()
 				return err
 			}
+			m.BrowserURL = browserURL
+			port, err := m.startBootstrap(ip)
+			if err != nil {
+				_ = m.BrowserServer.Close()
+				_ = m.HTTPServer.Close()
+				return err
+			}
 			fmt.Printf("Open on your device: http://%s:%d/\n", ip, port)
+			fmt.Printf("Open on this computer: %s\n", browserURL)
+			fmt.Printf("HTTPS port: %d\n", m.HTTPServer.Port())
 			block, _ := pem.Decode(m.localCAPEM)
 			sum := sha256.Sum256(block.Bytes)
 			fmt.Printf("CA fingerprint: %s\n", hex.EncodeToString(sum[:]))
